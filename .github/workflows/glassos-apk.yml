@@ -17,10 +17,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Configure Android SDK
-        uses: android-actions/setup-android@v3
-      - name: Install Android platform 37
-        run: sdkmanager --install 'platforms;android-37' 'build-tools;37.0.0'
       - name: Configure Gradle
         uses: gradle/actions/setup-gradle@v4
       - name: Compile GlassOS Folio launcher
