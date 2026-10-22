@@ -8,6 +8,7 @@ import android.graphics.*;
 import android.graphics.drawable.*;
 import android.provider.Settings;
 import android.view.*;
+import android.view.accessibility.AccessibilityManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
 import android.text.*;
@@ -65,7 +66,7 @@ public class MainActivity extends Activity {
     v.setClickable(true);
     v.setOnTouchListener((target,event)->{
       if(event.getAction()==MotionEvent.ACTION_DOWN){
-        target.animate().scaleX(.96f).scaleY(.96f).setDuration(110).start();return true;
+        target.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);target.animate().scaleX(.96f).scaleY(.96f).setDuration(110).start();return true;
       }
       if(event.getAction()==MotionEvent.ACTION_UP){
         target.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(new android.view.animation.OvershootInterpolator(.6f)).start();
@@ -153,7 +154,31 @@ public class MainActivity extends Activity {
     TextView name=text(label,12,Color.WHITE);name.setSingleLine();name.setEllipsize(TextUtils.TruncateAt.END);name.setShadowLayer(4,0,1,0xaa1f1b20);
     LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,dp(22));np.topMargin=dp(5);tile.addView(name,np);
     tile.setOnClickListener(v->{if(installed!=null)launch(installed);else library();});
+    tile.setContentDescription("Open "+label);
+    tile.setOnLongClickListener(v->{showAppMenu(v,label,installed);return true;});
     return tile;
+  }
+  private void showAppMenu(View anchor,String label,ResolveInfo installed){
+    PopupMenu menu=new PopupMenu(this,anchor);
+    menu.getMenu().add("Open "+label);
+    menu.getMenu().add("App info");
+    menu.getMenu().add("All apps");
+    menu.setOnMenuItemClickListener(item->{
+      String choice=item.getTitle().toString();
+      if(choice.startsWith("Open")){if(installed!=null)launch(installed);else library();}
+      else if(choice.equals("App info") && installed!=null){
+        Intent intent=new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+        intent.setData(android.net.Uri.parse("package:"+installed.activityInfo.packageName));startActivity(intent);
+      }else library();
+      return true;
+    });
+    anchor.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+    menu.show();
+  }
+  private void enter(View view){
+    view.setAlpha(0f);view.setTranslationY(dp(12));
+    view.animate().alpha(1f).translationY(0).setDuration(220)
+      .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
   }
   private void home(){
     canvas("home");
@@ -229,10 +254,10 @@ public class MainActivity extends Activity {
     add(shell,dock,-1,86);
   }
   private void library(){
-    canvas("library");title("App Library");EditText input=new EditText(this);input.setSingleLine();input.setHint("⌕  Search");input.setTextSize(17);input.setPadding(dp(20),0,dp(15),0);input.setBackground(translucent(19));margin(shell,input,52,20);
-    ScrollView scroll=new ScrollView(this);scroll.setVerticalScrollBarEnabled(false);LinearLayout content=column();scroll.addView(content);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+    canvas("library");title("App Library");EditText input=new EditText(this);input.setSingleLine();input.setHint("⌕  Search");input.setTextSize(17);input.setPadding(dp(20),0,dp(15),0);input.setBackground(translucent(19));margin(shell,input,52,20);input.setContentDescription("Search installed applications");
+    ScrollView scroll=new ScrollView(this);scroll.setVerticalScrollBarEnabled(false);scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);scroll.setFillViewport(true);LinearLayout content=column();scroll.addView(content);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
     Runnable update=()->{content.removeAllViews();ArrayList<ResolveInfo> chosen=new ArrayList<>();String q=input.getText().toString().toLowerCase(Locale.ROOT);for(ResolveInfo a:apps)if(a.loadLabel(pm).toString().toLowerCase(Locale.ROOT).contains(q))chosen.add(a);grid(content,chosen);};
-    input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){}public void onTextChanged(CharSequence s,int st,int before,int count){update.run();}public void afterTextChanged(Editable e){}});update.run();
+    input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){}public void onTextChanged(CharSequence s,int st,int before,int count){update.run();}public void afterTextChanged(Editable e){}});update.run();enter(scroll);
   }
   private TextView button(String label,Runnable run){
     TextView v=text(label,18,foreground());v.setBackground(translucent(21));touch(v,run);return v;
@@ -250,7 +275,7 @@ public class MainActivity extends Activity {
       public void onProgressChanged(SeekBar seek,int progress,boolean fromUser){if(fromUser){WindowManager.LayoutParams a=getWindow().getAttributes();a.screenBrightness=Math.max(.02f,progress/255f);getWindow().setAttributes(a);}}
       public void onStartTrackingTouch(SeekBar s){}public void onStopTrackingTouch(SeekBar s){}
     });add(shell,slider,-1,58);
-    line("Notifications",this::notifications);line("GlassOS Settings",this::settings);
+    line("Notifications",this::notifications);line("GlassOS Settings",this::settings);enter(shell);
   }
   private void notifications(){
     canvas("notifications");title("Notifications");
@@ -262,7 +287,7 @@ public class MainActivity extends Activity {
       CharSequence t=n.getNotification().extras.getCharSequence(Notification.EXTRA_TITLE);
       CharSequence msg=n.getNotification().extras.getCharSequence(Notification.EXTRA_TEXT);
       TextView card=button((t==null?n.getPackageName():t.toString())+"\n"+(msg==null?"":msg),()->{try{if(n.getNotification().contentIntent!=null)n.getNotification().contentIntent.send();}catch(Exception ignored){}});
-      card.setPadding(dp(16),dp(14),dp(16),dp(14));margin(items,card,100,10);
+      card.setPadding(dp(16),dp(14),dp(16),dp(14));margin(items,card,100,10);card.setContentDescription("Notification: "+(t==null?n.getPackageName():t.toString()));
     }
   }
   private void settings(){
@@ -274,8 +299,9 @@ public class MainActivity extends Activity {
     line("Select default Home app",()->startActivity(new Intent(Settings.ACTION_HOME_SETTINGS)));
     line("Notification access",()->startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
     line("Android system settings",()->startActivity(new Intent(Settings.ACTION_SETTINGS)));
+    line("Refresh installed apps",()->{refresh();home();});
     space(shell,18);
-    TextView note=text("GlassOS 0.2  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
+    TextView note=text("GlassOS 0.3  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
   }
   @Override public void onBackPressed(){if(page.equals("home"))super.onBackPressed();else home();}
 }
