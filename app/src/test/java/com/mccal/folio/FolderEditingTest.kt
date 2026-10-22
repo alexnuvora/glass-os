@@ -1,0 +1,161 @@
+package com.mccal.folio
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class FolderEditingTest {
+    private val folderId = "folder:123e4567-e89b-12d3-a456-426614174000"
+
+    @Test fun createFolderUsesTargetCellWithoutMovingUnrelatedApps() {
+        val before = HomeLayout(listOf("personal", "other", "work"), listOf(null, "dock", null, null))
+        val next = createFolder(before, FolderEntry(folderId, "Daily", emptyList()), "personal", "work", 0)
+        assertEquals(listOf(folderId, "other"), next.slots)
+        assertEquals(listOf("personal", "work"), next.folder(folderId)?.appIds)
+        assertEquals(before.dock, next.dock)
+    }
+
+    @Test fun createFolderRejectsWidgetCollisionAndNestedFolder() {
+        val widget = WidgetPlacement(7, 100, 0, 0, 0, 2, 2)
+        val before = HomeLayout(listOf("a", "b"), emptyList(), listOf(widget))
+        assertSame(before, createFolder(before, FolderEntry(folderId, "Group", emptyList()), "a", "b", 0))
+        assertSame(before, createFolder(before, FolderEntry(folderId, "Group", emptyList()), folderId, "b", 2))
+    }
+
+    @Test fun addingFromDockTransfersShortcutAndPreventsDuplicateMembership() {
+        val folder = FolderEntry(folderId, "Group", listOf("a", "b"))
+        val before = HomeLayout(listOf(folderId), listOf("work", null), folders = listOf(folder))
+        val next = addAppToFolder(before, folderId, "work")
+        assertEquals(listOf(null, null), next.dock)
+        assertEquals(listOf("a", "b", "work"), next.folder(folderId)?.appIds)
+        assertSame(next, addAppToFolder(next, folderId, "work"))
+    }
+
+    @Test fun extractingFromTwoItemFolderDissolvesAtSameCell() {
+        val work = profileAppId("com.same/.Main", 42, 10)
+        val before = HomeLayout(listOf(null, folderId), listOf(null, null), folders = listOf(
+            FolderEntry(folderId, "Pair", listOf("personal", work))))
+        val next = removeAppFromFolder(before, folderId, work, DropTarget.Dock(0))
+        assertEquals(listOf(null, "personal"), next.slots)
+        assertEquals(listOf(work, null), next.dock)
+        assertTrue(next.folders.isEmpty())
+    }
+
+    @Test fun movingChildBetweenFoldersDissolvesSourceAndKeepsOneUniqueMembership() {
+        val secondId = "folder:123e4567-e89b-12d3-a456-426614174001"
+        val before = HomeLayout(listOf(folderId, secondId), emptyList(), folders = listOf(
+            FolderEntry(folderId, "First", listOf("a", "moving")),
+            FolderEntry(secondId, "Second", listOf("b", "c"))))
+        val next = addAppToFolder(before, secondId, "moving", 1)
+        assertEquals(listOf("a", secondId), next.slots)
+        assertEquals(listOf("b", "moving", "c"), next.folder(secondId)?.appIds)
+        assertEquals(1, next.folders.sumOf { folder -> folder.appIds.count("moving"::equals) })
+    }
+
+    @Test fun simultaneousRemovalCannotResurrectLastDissolvedChild() {
+        val before = HomeLayout(listOf("outside", folderId), listOf("dock", null), folders = listOf(
+            FolderEntry(folderId, "Pair", listOf("removed-a", "removed-b"))))
+        val next = reconcileFolders(before, setOf("removed-a", "removed-b"))
+        assertEquals(listOf("outside"), next.slots)
+        assertEquals(listOf("dock", null), next.dock)
+        assertTrue(next.folders.isEmpty())
+    }
+
+    @Test fun rejectedExtractionFromFullDockPreservesEveryFolderChild() {
+        val folder = FolderEntry(folderId, "Pair", listOf("a", "b"))
+        val before = HomeLayout(listOf(folderId), listOf("d0", "d1", "d2", "d3", "d4", "d5"), folders = listOf(folder))
+        assertSame(before, removeAppFromFolder(before, folderId, "b", DropTarget.Dock(0)))
+        assertEquals(setOf("a", "b", "d0", "d1", "d2", "d3", "d4", "d5"),
+            (before.folders.flatMap { it.appIds } + before.dock.filterNotNull()).toSet())
+    }
+
+    @Test fun folderEditSnapshotsRoundTripWithoutChangingWidgetsOrGaps() {
+        val widget = WidgetPlacement(9, 99, 0, 2, 2, 2, 2)
+        val before = HomeLayout(listOf("a", null, "b", null, "other"), listOf(null, "dock"), listOf(widget))
+        val after = createFolder(before, FolderEntry(folderId, "Group", emptyList()), "a", "b", 0)
+        assertEquals(before, before.copy())
+        assertEquals(widget, after.widgetPlacements.single())
+        assertEquals("other", after.slots[4])
+    }
+    @Test fun aFolderKeepsTakingAppsPastTwo() {
+        // Reported: only two apps could be put in a folder. The model must accept any number, from Home or anywhere.
+        var layout = HomeLayout(listOf(folderId, "c", "d"), listOf(null), folders = listOf(FolderEntry(folderId, "Group", listOf("a", "b"))))
+        layout = addAppToFolder(layout, folderId, "c")
+        layout = addAppToFolder(layout, folderId, "d")
+        layout = addAppToFolder(layout, folderId, "e")
+        assertEquals(listOf("a", "b", "c", "d", "e"), layout.folder(folderId)?.appIds)
+        assertEquals(listOf(folderId), layout.slots.filterNotNull())
+    }
+
+    @Test fun addingSeveralAppsTakesEachFromHomeAndTheDockInOrder() {
+        val folder = FolderEntry(folderId, "Group", listOf("a"))
+        val before = HomeLayout(listOf(folderId, "b", null, "c"), listOf("d", null), folders = listOf(folder))
+        val next = addAppsToFolder(before, folderId, listOf("b", "d", "c"))
+        assertEquals(listOf("a", "b", "d", "c"), next.folder(folderId)?.appIds)
+        assertEquals("emptied cells at the end are trimmed", listOf(folderId), next.slots)
+        assertEquals(listOf(null, null), next.dock)
+    }
+
+    @Test fun addingSeveralAppsSkipsRepeatsMembersAndReservedIds() {
+        val folder = FolderEntry(folderId, "Group", listOf("a", "b"))
+        val before = HomeLayout(listOf(folderId, "c"), emptyList(), folders = listOf(folder))
+        val next = addAppsToFolder(before, folderId, listOf("a", "c", "c", "", folderId))
+        assertEquals(listOf("a", "b", "c"), next.folder(folderId)?.appIds)
+        assertSame(before, addAppsToFolder(before, "folder:missing", listOf("c")))
+        assertSame(before, addAppsToFolder(before, folderId, listOf("a", "b")))
+    }
+
+    @Test fun addingAppsFromAFolderThatThenDissolvesPromotesNothingTwice() {
+        val other = "folder:223e4567-e89b-12d3-a456-426614174000"
+        val before = HomeLayout(listOf(folderId, other), emptyList(), folders = listOf(
+            FolderEntry(folderId, "Target", listOf("t1", "t2")), FolderEntry(other, "Pair", listOf("x", "y"))))
+        // Taking both of the pair's apps dissolves it: the first promotes the second into its cell, the second is then taken from Home.
+        val next = addAppsToFolder(before, folderId, listOf("x", "y"))
+        assertEquals(listOf("t1", "t2", "x", "y"), next.folder(folderId)?.appIds)
+        assertEquals(null, next.folder(other))
+        assertEquals(listOf(folderId), next.slots)
+    }
+
+    private val fullPage = List(HOME_CELLS) { "app$it" }
+
+    @Test fun newFolderCellTakesTheFirstFreeCellOnThePreferredPage() {
+        val layout = HomeLayout(listOf("a", null, "b"), emptyList())
+        assertEquals(1, newFolderCell(layout, "x", "y", 0, listOf(0), emptySet()) { true })
+    }
+
+    @Test fun newFolderCellSkipsCoveredAndHiddenCells() {
+        val layout = HomeLayout(emptyList(), emptyList())
+        assertEquals(3, newFolderCell(layout, "x", "y", 0, listOf(0), setOf(0, 1)) { it != 2 })
+    }
+
+    @Test fun newFolderCellMovesOnWhenThePreferredPageIsFull() {
+        val layout = HomeLayout(fullPage + listOf("c", null), emptyList())
+        assertEquals(HOME_CELLS + 1, newFolderCell(layout, "x", "y", 0, listOf(0, 1), emptySet()) { true })
+    }
+
+    @Test fun newFolderCellCanUseTheCellOfEitherApp() {
+        val layout = HomeLayout(fullPage.toMutableList().apply { this[5] = "y" }, emptyList())
+        assertEquals(5, newFolderCell(layout, "x", "y", 0, listOf(0), emptySet()) { true })
+    }
+
+    @Test fun aFullHomeGetsTheFolderOnANewPageInsteadOfNothing() {
+        // Long-pressed in the dock, second app only in the App Library, every Home cell taken: this used to do nothing.
+        val layout = HomeLayout(fullPage, listOf("x", null, null, null))
+        val target = newFolderCell(layout, "x", "y", 0, listOf(0), emptySet()) { true }
+        assertEquals(HOME_CELLS, target)
+        val next = createFolder(layout, FolderEntry(folderId, "Folder", emptyList()), "x", "y", target)
+        assertEquals(folderId, next.slotAt(target))
+        assertEquals(listOf("x", "y"), next.folder(folderId)?.appIds)
+        assertEquals(listOf(null, null, null, null), next.dock)
+        assertEquals(2, next.pageCount)
+    }
+
+    @Test fun createFolderOffersOnlyAppsThatCanJoinANewFolder() {
+        // An app already in a folder used to be listed under New folder with…, and picking it did nothing.
+        val layout = HomeLayout(listOf(folderId), emptyList(), folders = listOf(FolderEntry(folderId, "Folder", listOf("a", "b"))))
+        assertEquals(false, canStartFolderWith(layout, "a"))
+        assertSame(layout, createFolder(layout, FolderEntry("folder:223e4567-e89b-12d3-a456-426614174000", "New", emptyList()), "x", "a", 1))
+        assertEquals(true, canStartFolderWith(layout, "x"))
+    }
+}

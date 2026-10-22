@@ -1,0 +1,280 @@
+import java.io.ByteArrayOutputStream
+import java.time.OffsetDateTime
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("androidx.baselineprofile")
+}
+
+val releaseSigningVariables = listOf(
+    "FOLIO_RELEASE_STORE_FILE",
+    "FOLIO_RELEASE_STORE_PASSWORD",
+    "FOLIO_RELEASE_KEY_ALIAS",
+    "FOLIO_RELEASE_KEY_PASSWORD",
+)
+val releaseSigningValues = releaseSigningVariables.associateWith { name ->
+    System.getenv(name)?.takeIf { it.isNotBlank() }
+}
+val suppliedReleaseSigningVariables = releaseSigningValues.filterValues { it != null }.keys
+check(suppliedReleaseSigningVariables.isEmpty() || suppliedReleaseSigningVariables.size == releaseSigningVariables.size) {
+    val missing = releaseSigningVariables.filterNot(suppliedReleaseSigningVariables::contains)
+    "Release signing is only configured when all four FOLIO_RELEASE_* variables are set. Missing: ${missing.joinToString()}"
+}
+
+val releaseStoreFile = releaseSigningValues["FOLIO_RELEASE_STORE_FILE"]?.let { configuredPath ->
+    rootProject.file(configuredPath).canonicalFile.also { storeFile ->
+        val repositoryRoot = rootProject.projectDir.canonicalFile.toPath()
+        check(!storeFile.toPath().startsWith(repositoryRoot)) {
+            "FOLIO_RELEASE_STORE_FILE must point outside the repository."
+        }
+        check(storeFile.isFile && storeFile.canRead()) {
+            "FOLIO_RELEASE_STORE_FILE does not point to a readable file."
+        }
+    }
+}
+
+val folioVersion = "0.6.9-beta.4"
+
+// Bundle the changelog so Folio can show What's New after an update.
+val bundleChangelog = tasks.register<Copy>("bundleChangelog") {
+    from(rootProject.file("CHANGELOG.md"))
+    into(layout.buildDirectory.dir("generated/changelog"))
+}
+tasks.named("preBuild") { dependsOn(bundleChangelog) }
+
+// Bundle Folio's own source (docs/sdk/source) so the built-in themes and tweaks are real packages, read from the same
+// files the SDK documents and the tests check. One copy, not two.
+// Sync, not Copy: a file removed from the source (or newly excluded) has to leave the APK as well.
+val bundleFolioSource = tasks.register<Sync>("bundleFolioSource") {
+    from(rootProject.file("docs/sdk/source")) {
+        // The drawings and the script that rasterises them are build sources, not something the phone reads.
+        exclude("README.md", "**/*.svg", "**/generate.py")
+    }
+    into(layout.buildDirectory.dir("generated/market/market/source"))
+}
+// Write the list of files beside them: an APK's assets can't be listed reliably (and Robolectric can't at all), so the
+// source says what it contains instead of Folio guessing from folder names.
+val indexFolioSource = tasks.register("indexFolioSource") {
+    dependsOn(bundleFolioSource)
+    val sourceDir = layout.buildDirectory.dir("generated/market/market/source")
+    // Without this the task is "up to date" after a file is added to the source, and files.json quietly stops
+    // listing everything that's actually there.
+    inputs.dir(rootProject.file("docs/sdk/source")).withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.dir(sourceDir)
+    doLast {
+        val root = sourceDir.get().asFile
+        val paths = root.walkTopDown().filter { it.isFile && it.name != "files.json" }
+            .map { it.relativeTo(root).invariantSeparatorsPath }.sorted().toList()
+        File(root, "files.json").writeText(paths.joinToString(",", "[", "]") { "\"" + it + "\"" })
+    }
+}
+tasks.named("preBuild") { dependsOn(indexFolioSource) }
+
+/**
+ * Folio Dev's "welcome back" page (docs/release-0.6.9-plan.md, G4). Writes dev-build.json for the debug and fast builds only:
+ * the branch, commit, time, the last commits and, if the branch has one, the steps in docs/dev-notes.md. A release build
+ * never gets the file, so the page has nothing to show there. Always runs, so the commit and time are never stale.
+ */
+@UntrackedTask(because = "It records the commit and time of this build, so it has to run every time")
+abstract class DevBuildInfoTask @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
+    @get:Internal abstract val repoDir: DirectoryProperty
+    @get:Internal abstract val notesFile: RegularFileProperty
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    private fun git(vararg args: String): String = runCatching {
+        val out = ByteArrayOutputStream()
+        exec.exec { commandLine(listOf("git") + args); workingDir = repoDir.get().asFile; standardOutput = out; errorOutput = ByteArrayOutputStream(); isIgnoreExitValue = true }
+        out.toString(Charsets.UTF_8).trim()
+    }.getOrDefault("")
+
+    private fun q(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ").replace("\t", " ") + "\""
+
+    @TaskAction fun write() {
+        val commits = git("log", "-15", "--abbrev=8", "--format=%h%x09%s").lines().filter { it.contains('\t') }.map { it.substringBefore('\t') to it.substringAfter('\t') }
+        val notes = notesFile.get().asFile.takeIf { it.isFile }?.readLines().orEmpty().map { it.trim() }.filter { it.startsWith("- ") }.map { it.removePrefix("- ").trim() }
+        val json = buildString {
+            append("{")
+            append("\"branch\":").append(q(git("rev-parse", "--abbrev-ref", "HEAD").ifEmpty { "unknown" })).append(",")
+            append("\"sha\":").append(q(git("rev-parse", "--short=8", "HEAD").ifEmpty { "unknown" })).append(",")
+            append("\"dirty\":").append(git("status", "--porcelain").isNotEmpty()).append(",")
+            append("\"builtAt\":").append(q(OffsetDateTime.now().toString())).append(",")
+            append("\"commits\":[").append(commits.joinToString(",") { "{\"sha\":${q(it.first)},\"subject\":${q(it.second)}}" }).append("],")
+            append("\"notes\":[").append(notes.joinToString(",") { q(it) }).append("]")
+            append("}")
+        }
+        outputDir.get().asFile.also { it.mkdirs() }.resolve("dev-build.json").writeText(json)
+    }
+}
+val generateDevBuildInfo = tasks.register<DevBuildInfoTask>("generateDevBuildInfo") {
+    repoDir.set(rootProject.layout.projectDirectory)
+    notesFile.set(rootProject.layout.projectDirectory.file("docs/dev-notes.md"))
+    outputDir.set(layout.buildDirectory.dir("generated/devbuild"))
+}
+/**
+ * The profile is recorded from the "fast" build ("Folio Dev", debug-signed) because the release APK can't be
+ * installed over the signed Folio on a test phone, and merged into main so the release build ships it.
+ */
+baselineProfile {
+    mergeIntoMain = true
+}
+
+/**
+ * The two build types the baseline profile plugin adds get their own application id so they install beside the
+ * real Folio instead of trying to replace it: the phone used for recording runs a release-signed Folio, which a
+ * locally signed build of the same id can't update. A profile is a list of classes and methods, so recording it
+ * under another id changes nothing about what ends up in the release APK.
+ */
+androidComponents {
+    onVariants { variant ->
+        // Only the two Folio Dev build types get dev-build.json; a release build never sees the folder. Registered through the
+        // variant API so everything that reads assets (merge, lint) depends on the task that writes it.
+        if (variant.buildType == "debug" || variant.buildType == "fast") {
+            variant.sources.assets?.addGeneratedSourceDirectory(generateDevBuildInfo, DevBuildInfoTask::outputDir)
+        }
+        if (variant.buildType == "nonMinifiedRelease" || variant.buildType == "benchmarkRelease") {
+            variant.applicationId.set("com.mccal.folio.profile")
+        }
+    }
+}
+
+android {
+    namespace = "com.mccal.folio"
+    compileSdk = 37
+    defaultConfig {
+        applicationId = "com.glassos.launcher"
+        minSdk = 31
+        targetSdk = 36
+        // Semantic version; see CHANGELOG.md and docs/adr/0007-release-trains.md.
+        //   versionCode = (MAJOR * 10000 + MINOR * 100 + PATCH) * 10 + HOTFIX
+        // The last digit is why a fix on top of a release can exist at all: 0.6.7 is 6070 and 0.6.7.1 is 6071, so a
+        // fix never has to take the number the next feature release wanted, which is what went wrong on 23 Sep 2026.
+        // A pre-release (0.7.0-beta.1) shares its release's code, and the release installs over it because
+        // SoftwareUpdate.isNewer orders by the version name. Codes only ever rise, so the older formula's 607 is
+        // still below this one's 6070.
+        versionName = folioVersion
+        versionCode = folioVersion.substringBefore('-').split('.').map(String::toInt).let { parts ->
+            require(parts.size in 3..4) { "folioVersion needs MAJOR.MINOR.PATCH, and may add .HOTFIX: was $folioVersion" }
+            val hotfix = parts.getOrElse(3) { 0 }
+            require(hotfix in 1..9 || parts.size == 3) { "the hotfix digit runs 1 to 9: was $folioVersion" }
+            (parts[0] * 10000 + parts[1] * 100 + parts[2]) * 10 + hotfix
+        }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = releaseSigningValues.getValue("FOLIO_RELEASE_STORE_PASSWORD")
+                keyAlias = releaseSigningValues.getValue("FOLIO_RELEASE_KEY_ALIAS")
+                keyPassword = releaseSigningValues.getValue("FOLIO_RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            if (releaseStoreFile != null) signingConfig = signingConfigs.getByName("release")
+            manifestPlaceholders["appLabel"] = "Folio"
+        }
+        // Optimized like release (R8, no debuggable JIT slowdown) but signed with the local debug key, so it
+        // installs over a debug build and keeps Folio's data. Use this to judge real smoothness on the phone.
+        create("fast") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            // Its own app ("Folio Dev") so test builds install next to the signed release instead of over it.
+            applicationIdSuffix = ".dev"
+            manifestPlaceholders["appLabel"] = "Folio Dev"
+        }
+        // Same app id as "fast", so one build installs over the other and Folio Dev keeps its layout and settings.
+        // Only the name differs, because that is the one place you can tell them apart on the phone, and it matters:
+        // a debug build is far slower, so frame numbers taken on one mean nothing next to numbers from the other.
+        getByName("debug") {
+            applicationIdSuffix = ".dev"
+            manifestPlaceholders["appLabel"] = "Folio Debug"
+        }
+    }
+    // "fast" uses release's no-op tracing/diagnostic sources.
+    sourceSets {
+        getByName("fast") { kotlin.directories.add("src/release/java"); res.directories.add("src/dev/res") }
+        // Folio Dev (debug and fast builds) gets an amber icon so it's easy to tell apart from the release.
+        getByName("debug") { res.directories.add("src/dev/res") }
+        getByName("main") {
+            assets.srcDir(layout.buildDirectory.dir("generated/changelog").get().asFile)
+            assets.srcDir(layout.buildDirectory.dir("generated/market").get().asFile)
+        }
+    }
+    buildFeatures { compose = true }
+    // Robolectric needs the app's resources and manifest in unit tests.
+    testOptions.unitTests.isIncludeAndroidResources = true
+    // Android 13's per-app language picker: AGP builds locales_config.xml from the values-* folders a translation adds.
+    androidResources { generateLocaleConfig = true }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+dependencies {
+    implementation(project(":market"))
+    baselineProfile(project(":baselineprofile"))
+    implementation("androidx.window:window:1.5.1")
+    // Installs the baseline profiles that Compose and AndroidX ship, so hot paths are compiled ahead of time.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    // Named trace sections (PRF-13). Other AndroidX libraries already bring it; declared because Folio calls it.
+    implementation("androidx.tracing:tracing:1.2.0")
+    implementation(platform("androidx.compose:compose-bom:2025.06.01"))
+    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    // Images from sources the user added (Apache-2.0). Only coil3 core and the Compose binding: the bytes come from
+    // Folio's own HTTPS client, so there is no second network stack in the APK and no second set of rules.
+    implementation("io.coil-kt.coil3:coil-compose:3.2.0")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20260814") // real org.json for StatusStyle round-trip tests
+    // Renders Compose on the JVM, so a screen can be checked without a phone attached.
+    testImplementation("org.robolectric:robolectric:4.17")
+    // runTest, so the Market's network calls can be tested without a real dispatcher.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation(platform("androidx.compose:compose-bom:2025.06.01"))
+    androidTestImplementation(platform("androidx.compose:compose-bom:2025.06.01"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.0")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+kotlin {
+    compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
+}
+
+composeCompiler {
+    // What Folio promises never changes after it's made; see the file for each type and why.
+    stabilityConfigurationFiles.add(layout.projectDirectory.file("compose-stability.conf"))
+}
+
+// Compose compiler reports, off unless asked for: `./gradlew :app:compileDebugKotlin -PcomposeReports --rerun-tasks`
+// writes app/build/compose-reports/, which says which composables can skip and which classes Compose treats as
+// unstable (so anything reading them redraws whenever its parent does). Nothing changes in a normal build.
+if (providers.gradleProperty("composeReports").isPresent) {
+    composeCompiler {
+        reportsDestination = layout.buildDirectory.dir("compose-reports")
+        metricsDestination = layout.buildDirectory.dir("compose-reports")
+    }
+}

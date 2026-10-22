@@ -1,0 +1,347 @@
+package com.mccal.folio
+
+import android.content.ComponentName
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** 3: 36-cell Home pages (More rows); versions 1–2 had 24-cell pages and are moved on import. */
+const val LAYOUT_BACKUP_VERSION = 3
+const val MAX_LAYOUT_BACKUP_BYTES = 2 * 1024 * 1024
+private const val MAX_BACKUP_PAGES = 100
+
+data class BackupWidgetDescriptor(
+    val slot: Int,
+    val providerComponent: String?,
+    val userSerial: Long?,
+    val title: String,
+    val profileLabel: String,
+    val builtinId: Int? = null,
+    val isWork: Boolean = false,
+)
+
+data class LayoutImportPreview(
+    val layout: HomeLayout,
+    val missingApps: List<String>,
+    val profileIssues: List<String>,
+    val appCount: Int,
+    val folderCount: Int,
+    val widgetCount: Int,
+    val compact: LayoutPreset,
+    val expanded: LayoutPreset,
+    /** The upright inner screen's own layout (since 0.6.8); null when it shares the inner screen's, as every older backup does. */
+    val portrait: LayoutPreset? = null,
+    val labels: Boolean,
+    val googleSearch: Boolean,
+    val verticalStatus: Boolean,
+    /** What the Market installed on the phone this backup came from, for `InstalledStore` to read. */
+    val packages: String? = null,
+    /** How many packages that is. Only the Market can count them, so [BackupController] fills this in. */
+    val packageCount: Int = 0,
+    /** Names people typed themselves. They exist nowhere else on the phone, so a backup that left them out lost them. */
+    val appNames: Map<String, String> = emptyMap(),
+    /** Icon looks chosen for single apps (since 0.6.8); a backup from before has none, and the ones on the phone stay. */
+    val appIconStyles: Map<String, AppIconOverride> = emptyMap(),
+    /** Icon swipe and double tap actions; a backup from before has none, and the ones on the phone stay. */
+    val iconActions: Map<String, IconActions> = emptyMap(),
+)
+
+fun layoutBackupScope(context: Context): String {
+    val prefs = context.getSharedPreferences("layout_backup_identity", Context.MODE_PRIVATE)
+    return prefs.getString("scope", null) ?: java.util.UUID.randomUUID().toString().also { prefs.edit().putString("scope", it).apply() }
+}
+
+fun encodeLayoutBackup(
+    state: LauncherState,
+    widgetDescriptors: List<BackupWidgetDescriptor>,
+    sourceScope: String,
+    /** What the Market installed, from `InstalledStore.export()`, or null when this phone has no packages to carry. */
+    packages: String? = null,
+): String {
+    require(sourceScope.isNotBlank())
+    require(state.leadingSlots.size == HOME_CELLS) { "Unfolded-only page must contain exactly $HOME_CELLS cells" }
+    val descriptorBySlot = widgetDescriptors.associateBy(BackupWidgetDescriptor::slot)
+    val iconStyles = withoutPictures(state.appIconStyles)
+    // Only the apps this file names, which are all a restore reads. Every app on the phone, in every profile and
+    // including the ones behind the Hidden Apps lock, is not the layout's to hand to whoever gets the file.
+    val named = (state.homeSlots + state.leadingSlots + state.dock).filterNotNullTo(mutableSetOf()) +
+        state.folders.flatMap { it.appIds } + state.appNames.keys + iconStyles.keys + state.iconActions.keys
+    val apps = JSONArray().also { array -> state.apps.filter { it.id in named }.forEach { app -> array.put(JSONObject()
+        .put("id", app.id).put("label", backupLabel(app.label, app.component.packageName.ifBlank { app.id })).put("component", app.component.flattenToString())
+        .put("userSerial", app.userSerial).put("profileLabel", backupProfileLabel(app.profileLabel, app.isWork)).put("work", app.isWork)
+        // A clone also says so (since 0.6.9); `work` still means "not personal", so older Folio reads it as before.
+        .putOpt("kind", storedProfileKind(app.kind))) } }
+    val folders = JSONArray().also { array -> state.folders.forEach { folder -> array.put(JSONObject()
+        .put("id", folder.id).put("title", folder.title).put("apps", JSONArray(folder.appIds))) } }
+    val widgets = JSONArray().also { array -> state.widgetPlacements.forEach { placement ->
+        val saved = state.widgetRestores.firstOrNull { it.slot == placement.slot }
+        val descriptor = descriptorBySlot[placement.slot]
+        val item = JSONObject().put("slot", placement.slot).put("page", placement.page)
+            .put("column", placement.column).put("row", placement.row).put("spanX", placement.spanX).put("spanY", placement.spanY)
+        if (placement.offsetX != 0f) item.put("offsetX", placement.offsetX.toDouble())
+        if (placement.offsetY != 0f) item.put("offsetY", placement.offsetY.toDouble())
+        when {
+            placement.id in setOf(CLOCK_WIDGET, DATE_WIDGET, INFO_WIDGET, UP_NEXT_WIDGET, SUGGESTIONS_WIDGET, BIG_CLOCK_WIDGET) -> item.put("builtinId", placement.id)
+            saved != null -> item.put("provider", saved.providerComponent).put("userSerial", saved.userSerial)
+                .put("title", backupLabel(saved.title, widgetFallbackTitle(saved.providerComponent))).put("profileLabel", backupProfileLabel(saved.profileLabel, saved.isWork)).put("work", saved.isWork)
+                .put("sourceScope", exportedWidgetScope(saved, sourceScope))
+            descriptor?.providerComponent != null && descriptor.userSerial != null -> item.put("provider", descriptor.providerComponent)
+                .put("userSerial", descriptor.userSerial).put("title", backupLabel(descriptor.title, widgetFallbackTitle(descriptor.providerComponent))).put("profileLabel", backupProfileLabel(descriptor.profileLabel, descriptor.isWork))
+                .put("work", descriptor.isWork).put("sourceScope", sourceScope)
+            else -> error("Widget ${placement.slot} has no portable provider descriptor")
+        }
+        array.put(item)
+    } }
+    fun preset(value: LayoutPreset) = JSONObject().put("iconSize", value.iconSize).put("rowGap", value.rowGap)
+        .put("dockWidth", value.dockWidth).put("dockPosition", value.dockPosition).put("dockAlignToGrid", value.dockAlignToGrid)
+        .put("dockPlacement", value.dockPlacement.name).put("statusAlignToGrid", value.statusAlignToGrid).put("statusPosition", value.statusPosition)
+        .put("columnGap", value.columnGap).put("dockSpacing", value.dockSpacing).put("widgetScale", value.widgetScale).put("pageTop", value.pageTop)
+    val root = JSONObject().put("version", LAYOUT_BACKUP_VERSION).put("sourceScope", sourceScope).put("apps", apps)
+        .put("homeSlots", JSONArray(state.homeSlots)).put("leadingSlots", JSONArray(state.leadingSlots))
+        .put("dock", JSONArray(state.dock)).put("folders", folders).put("widgets", widgets)
+        .put("labels", state.labels).put("googleSearch", state.googleSearch).put("verticalStatus", state.verticalStatus)
+        .put("compact", preset(state.compact)).put("expanded", preset(state.expanded))
+        // Only when there is one, so a backup from a phone that never made one is exactly what it was, and older Folio reads it.
+        .also { o -> state.portrait?.let { o.put("portrait", preset(it)) } }
+    // The names people typed themselves (since 0.6.5): they exist nowhere else on the phone.
+    root.put("appNames", JSONObject().apply { state.appNames.forEach { (id, name) -> put(id, name) } })
+    // Only when there are some, so a backup from a phone that uses none is exactly what it was before this existed.
+    if (iconStyles.isNotEmpty()) root.put("appIconStyles", appIconStylesToJson(iconStyles))
+    if (state.iconActions.isNotEmpty()) root.put("iconActions", iconActionsToJson(state.iconActions))
+    // Added in 0.7.0, and deliberately not a new backup version: a Folio that has never heard of the Market reads
+    // everything else in this file and ignores a key it doesn't know, so backups still travel backwards.
+    packages?.let { root.put("packages", JSONObject(it)) }
+    val text = root.toString(2)
+    // A backup over the limit can never be imported, here or anywhere else, so say so while there is still someone
+    // to tell rather than writing a file that only fails later.
+    require(text.toByteArray(Charsets.UTF_8).size <= MAX_LAYOUT_BACKUP_BYTES) { BACKUP_TOO_LARGE }
+    return text
+}
+
+/**
+ * Import refuses a whole file when any app, shortcut or widget has a blank name, so export never writes one: a blank label
+ * falls back to the package (or the id), a blank profile label to personal or work. Names that are not blank are written as they are.
+ */
+internal fun backupLabel(label: String, fallback: String) = label.takeIf { it.isNotBlank() } ?: fallback
+internal fun backupProfileLabel(label: String, work: Boolean) = backupLabel(label, if (work) "work" else "personal")
+internal fun widgetFallbackTitle(providerComponent: String?) =
+    providerComponent?.let { ComponentName.unflattenFromString(it)?.packageName?.takeIf(String::isNotBlank) ?: it }?.takeIf(String::isNotBlank) ?: "widget"
+
+/**
+ * A widget whose app was uninstalled or disabled, or that Android unbound, has nothing a backup can carry: no provider to
+ * describe and no saved restore entry. It used to stop the whole export with "Widget N is unavailable". Now it is left out and counted, so
+ * the layout (and every other widget) is still backed up and the message can say one was not included.
+ */
+internal fun withoutUnportableWidgets(state: LauncherState, descriptors: List<BackupWidgetDescriptor>): Pair<LauncherState, Int> {
+    val described = descriptors.filter { it.providerComponent != null && it.userSerial != null }.mapTo(mutableSetOf()) { it.slot }
+    val restorable = state.widgetRestores.mapTo(mutableSetOf()) { it.slot }
+    val builtins = setOf(CLOCK_WIDGET, DATE_WIDGET, INFO_WIDGET, UP_NEXT_WIDGET, SUGGESTIONS_WIDGET, BIG_CLOCK_WIDGET)
+    val kept = state.widgetPlacements.filter { it.id in builtins || it.slot in restorable || it.slot in described }
+    return state.copy(widgetPlacements = kept) to (state.widgetPlacements.size - kept.size)
+}
+
+internal const val BACKUP_TOO_LARGE = "Layout backup is larger than 2 MB"
+internal const val BACKUP_NEWER_VERSION = "Unsupported layout backup version"
+
+/** The few backup failures a person can act on; everything else gets the plain "could not be read" sentence. */
+internal enum class BackupFailure { TOO_LARGE, NEWER_VERSION, OTHER }
+internal fun backupFailureOf(error: Throwable): BackupFailure = when (error.message) {
+    BACKUP_TOO_LARGE -> BackupFailure.TOO_LARGE
+    BACKUP_NEWER_VERSION -> BackupFailure.NEWER_VERSION
+    else -> BackupFailure.OTHER
+}
+
+internal fun exportedWidgetScope(restore: WidgetRestore, currentScope: String) = restore.sourceScope ?: currentScope
+
+fun decodeLayoutBackup(raw: String, currentApps: List<AppEntry>, currentProfiles: List<AppProfile>, currentScope: String): LayoutImportPreview {
+    require(raw.toByteArray(Charsets.UTF_8).size <= MAX_LAYOUT_BACKUP_BYTES) { BACKUP_TOO_LARGE }
+    val root = JSONObject(raw)
+    val version = root.strictInt("version")
+    require(version in 1..LAYOUT_BACKUP_VERSION) { BACKUP_NEWER_VERSION }
+    val sourceScope = root.getString("sourceScope").also { require(it.isNotBlank()) }
+    val sameScope = sourceScope == currentScope
+    val appMetadata = root.getJSONArray("apps").let { array -> List(array.length()) { index ->
+        val item = array.getJSONObject(index)
+        val id = item.getString("id")
+        val identity = parseProfileAppId(id) ?: error("Invalid app identity")
+        require(item.getString("component") == identity.component)
+        require(ComponentName.unflattenFromString(identity.component) != null)
+        val serial = item.strictLong("userSerial")
+        require(serial >= 0 && item.getString("label").isNotBlank() && item.getString("profileLabel").isNotBlank())
+        if (item.strictBoolean("work")) require(identity.userSerial == serial) else require(identity.userSerial == null)
+        id to item.getString("label")
+    } }.also { entries -> require(entries.map { it.first }.distinct().size == entries.size) }.toMap()
+    val available = currentApps.filter { !it.isWork || sameScope }.mapTo(mutableSetOf(), AppEntry::id)
+    val missing = linkedSetOf<String>()
+    fun importedApp(id: String?): String? {
+        if (id == null) return null
+        require(id in appMetadata) { "Layout references an app without metadata" }
+        return id.takeIf { it in available } ?: run { missing += "$id (${appMetadata.getValue(id)})"; null }
+    }
+    // Versions 1–2 have 24-cell pages: the same cells keep their place on today's pages.
+    val legacyGrid = version < 3
+    val pageCells = if (legacyGrid) LEGACY_HOME_CELLS else HOME_CELLS
+    val slotsArray = root.getJSONArray("homeSlots")
+    require(slotsArray.length() <= pageCells * MAX_BACKUP_PAGES)
+    val rawSlots = List(slotsArray.length()) { index -> if (slotsArray.isNull(index)) null else slotsArray.getString(index) }
+        .let { if (legacyGrid) migrateLegacyHomeSlots(it) else it }
+    val rawLeadingSlots = if (version == 1) List(HOME_CELLS) { null } else {
+        val array = root.getJSONArray("leadingSlots")
+        require(array.length() == pageCells) { "Unfolded-only page must contain exactly $pageCells cells" }
+        migrateLegacyLeadingSlots(List(pageCells) { index -> if (array.isNull(index)) null else array.getString(index) })
+    }
+    val folderArray = root.getJSONArray("folders")
+    val importedFolders = List(folderArray.length()) { index ->
+        val item = folderArray.getJSONObject(index)
+        val children = item.getJSONArray("apps")
+        FolderEntry(item.getString("id"), item.getString("title"), List(children.length()) { children.getString(it) })
+    }
+    require(importedFolders.map(FolderEntry::id).distinct().size == importedFolders.size)
+    require(importedFolders.flatMap(FolderEntry::appIds).distinct().size == importedFolders.sumOf { it.appIds.size })
+    importedFolders.forEach { folder ->
+        require(isFolderId(folder.id) && folder.title.isNotBlank() && folder.appIds.size >= 2)
+        require(folder.appIds.none(::isReservedFolderId))
+        require((rawSlots + rawLeadingSlots).count(folder.id::equals) == 1)
+    }
+    val dockArray = root.getJSONArray("dock")
+    require(dockArray.length() in MIN_DOCK_SLOTS..MAX_DOCK_SLOTS)
+    val rawDock = List(dockArray.length()) { index -> if (dockArray.isNull(index)) null else dockArray.getString(index) }
+    val surfaceApps = (rawSlots + rawLeadingSlots).filterNotNull().filterNot(::isReservedFolderId) + rawDock.filterNotNull() +
+        importedFolders.flatMap(FolderEntry::appIds)
+    require(surfaceApps.distinct().size == surfaceApps.size) { "An app shortcut appears more than once" }
+    val folderResults = importedFolders.associate { folder -> folder.id to folder.copy(appIds = folder.appIds.mapNotNull(::importedApp)) }
+    val folders = folderResults.values.filter { it.appIds.size >= 2 }
+    val slots = rawSlots.map { value -> when {
+        value == null -> null
+        isReservedFolderId(value) -> folderResults[value]?.let { folder -> when (folder.appIds.size) { 0 -> null; 1 -> folder.appIds.single(); else -> folder.id } }
+            ?: error("Orphan folder reference")
+        else -> importedApp(value)
+    } }
+    val leadingSlots = rawLeadingSlots.map { value -> when {
+        value == null -> null
+        isReservedFolderId(value) -> folderResults[value]?.let { folder -> when (folder.appIds.size) { 0 -> null; 1 -> folder.appIds.single(); else -> folder.id } }
+            ?: error("Orphan folder reference")
+        else -> importedApp(value)
+    } }
+    val dock = rawDock.map { value -> value?.also { require(!isReservedFolderId(it)) }?.let(::importedApp) }
+    var layout = HomeLayout(slots.dropLastWhile { it == null }, dock, folders = folders, leadingSlots = leadingSlots)
+    val profileSerials = currentProfiles.mapTo(mutableSetOf(), AppProfile::userSerial)
+    val profileIssues = linkedSetOf<String>()
+    val widgetArray = root.getJSONArray("widgets")
+    require(widgetArray.length() <= 500)
+    val widgetSlots = mutableSetOf<Int>()
+    repeat(widgetArray.length()) { index ->
+        val item = widgetArray.getJSONObject(index)
+        val slot = item.strictInt("slot")
+        require(widgetSlots.add(slot)) { "Widget slots must be unique" }
+        val builtin = if (item.has("builtinId")) item.strictInt("builtinId") else null
+        val provider = item.optString("provider").takeIf(String::isNotBlank)
+        val id = if (builtin != null) {
+            require(builtin in setOf(CLOCK_WIDGET, DATE_WIDGET, INFO_WIDGET, UP_NEXT_WIDGET, SUGGESTIONS_WIDGET, BIG_CLOCK_WIDGET)); builtin
+        } else NEEDS_BINDING_WIDGET
+        val placement = WidgetPlacement(slot, id, item.strictInt("page"), item.strictInt("column"), item.strictInt("row"),
+            item.strictInt("spanX"), item.strictInt("spanY"),
+            item.optDouble("offsetX", 0.0).toFloat().takeIf { it.isFinite() }?.coerceIn(-MAX_WIDGET_OFFSET, MAX_WIDGET_OFFSET) ?: 0f,
+            item.optDouble("offsetY", 0.0).toFloat().takeIf { it.isFinite() }?.coerceIn(-MAX_WIDGET_OFFSET, MAX_WIDGET_OFFSET) ?: 0f).let { if (legacyGrid) migrateLegacyWidgetPlacement(it) else it }
+        require(validBackupPlacement(placement) && layout.widgetPlacements.none { backupOverlaps(it, placement) })
+        require(placement.coveredIndices().none { layout.slotAt(it) != null })
+        val restore = if (id == NEEDS_BINDING_WIDGET) {
+            require(provider != null && ComponentName.unflattenFromString(provider) != null)
+            val savedSerial = item.strictLong("userSerial"); require(savedSerial >= 0)
+            val title = item.getString("title"); val profileLabel = item.getString("profileLabel")
+            require(title.isNotBlank() && profileLabel.isNotBlank())
+            val work = item.strictBoolean("work")
+            val widgetScope = item.optString("sourceScope").takeIf { it.isNotBlank() } ?: sourceScope
+            val serial = if (work) savedSerial else currentProfiles.firstOrNull { it.isPersonal }?.userSerial ?: savedSerial
+            if ((work && widgetScope != currentScope) || serial !in profileSerials) profileIssues += "$title ($profileLabel profile requires explicit mapping)"
+            WidgetRestore(slot, provider, serial, title, profileLabel, work, widgetScope)
+        } else null
+        layout = layout.copy(widgetPlacements = (layout.widgetPlacements + placement).sortedBy { it.slot },
+            widgetRestores = layout.widgetRestores + listOfNotNull(restore))
+    }
+    fun preset(key: String): LayoutPreset {
+        val item = root.getJSONObject(key)
+        val loaded = LayoutPreset(item.strictFloat("iconSize"), item.strictFloat("rowGap"),
+            item.strictFloat("dockWidth"), item.strictFloat("dockPosition"), item.strictBoolean("dockAlignToGrid"),
+            // Added in 0.6.5: older backups don't have them.
+            DockPlacement.parse(item.optString("dockPlacement")), item.optBoolean("statusAlignToGrid", true),
+            item.optDouble("statusPosition", 0.0).toFloat(),
+            // Added with More rows.
+            item.optDouble("columnGap", DEFAULT_COLUMN_GAP.toDouble()).toFloat(), item.optDouble("dockSpacing", 0.0).toFloat(),
+            item.optDouble("widgetScale", 1.0).toFloat(), item.optBoolean("pageTop", false))
+        require(loaded == loaded.sanitized()) { "Invalid layout preset" }
+        return loaded
+    }
+    // Validate settings eagerly even though HomeLayout contains placement data only.
+    val compact = preset("compact"); val expanded = preset("expanded")
+    val portrait = if (root.has("portrait")) preset("portrait") else null
+    val labels = root.strictBoolean("labels"); val googleSearch = root.strictBoolean("googleSearch")
+    val verticalStatus = root.strictBoolean("verticalStatus")
+    // Added in 0.7.0; an older backup leaves the key out and carries no packages. Read but not understood here:
+    // what is inside belongs to `:market`, and only the Market can say what to do with it.
+    val packages = root.optJSONObject("packages")?.toString()
+    // Written since 0.6.5; a backup made before that simply has none, and the names already on the phone stay.
+    val appNames = root.optJSONObject("appNames")?.let { o ->
+        o.keys().asSequence().mapNotNull { id -> o.optString(id).takeIf { it.isNotBlank() }?.let { id to it.take(60) } }.toMap()
+    }.orEmpty()
+    return LayoutImportPreview(layout, missing.toList(), profileIssues.toList(),
+        appCount = (slots + leadingSlots).count { it != null && !isReservedFolderId(it) } +
+            dock.count { it != null } + folders.sumOf { it.appIds.size },
+        folderCount = folders.size, widgetCount = layout.widgetPlacements.size,
+        compact = compact, expanded = expanded, portrait = portrait, labels = labels, googleSearch = googleSearch, verticalStatus = verticalStatus,
+        packages = packages, appNames = appNames, appIconStyles = appIconStylesFromJson(root.optJSONObject("appIconStyles")),
+        iconActions = iconActionsFromJson(root.optJSONObject("iconActions")))
+}
+
+internal fun validBackupPlacement(value: WidgetPlacement): Boolean {
+    val base = value.slot in 0..10_000 && value.page in -1..99 && value.column >= 0 && value.row >= 0 &&
+        value.spanX in 1..GRID_COLUMNS && value.spanY in 1..GRID_ROWS && value.column + value.spanX <= GRID_COLUMNS
+    val inside = value.row + value.spanY <= GRID_ROWS
+    return base && (inside || legacyOverflowPlacement(value))
+}
+
+/** An overflow widget from a layout before schema 6. Its slot number names its page, so that number can't change. */
+internal fun legacyOverflowPlacement(value: WidgetPlacement) = value.page > 0 && value.slot / 3 == value.page &&
+    value.slot % 3 == 2 && value.column == 0 && value.row == GRID_ROWS && value.spanX == GRID_COLUMNS && value.spanY == 4
+
+/**
+ * Gives a restored backup's widgets slot numbers from [firstFree] on, so a Smart Stack or Big Clock look this Home still
+ * keeps for Undo can't land on an unrelated restored widget. Each new number keeps the old one's remainder by 3, which
+ * older layouts and the Your Widgets card still read; a [legacyOverflowPlacement] keeps its number. Returns the layout
+ * and each restored slot's new number.
+ */
+internal fun renumberRestoredWidgets(layout: HomeLayout, firstFree: Int): Pair<HomeLayout, Map<Int, Int>> {
+    val fixed = layout.widgetPlacements.filter(::legacyOverflowPlacement).mapTo(mutableSetOf()) { it.slot }
+    var next = firstFree
+    fun fresh(remainder: Int): Int {
+        while (next % 3 != remainder || next in fixed) next++
+        return next++
+    }
+    val slots = layout.widgetPlacements.sortedBy { it.slot }.associate { it.slot to if (it.slot in fixed) it.slot else fresh(it.slot % 3) }
+    return layout.copy(widgetPlacements = layout.widgetPlacements.map { it.copy(slot = slots.getValue(it.slot)) }.sortedBy { it.slot },
+        widgetRestores = layout.widgetRestores.mapNotNull { restore -> slots[restore.slot]?.let { restore.copy(slot = it) } }) to slots
+}
+
+private fun backupOverlaps(a: WidgetPlacement, b: WidgetPlacement) = a.page == b.page &&
+    a.column < b.column + b.spanX && b.column < a.column + a.spanX &&
+    a.row < b.row + b.spanY && b.row < a.row + a.spanY
+
+private fun JSONObject.strictInt(key: String): Int {
+    val number = get(key) as? Number ?: error("$key must be an integer")
+    val value = number.toDouble()
+    require(value.isFinite() && value % 1.0 == 0.0 && value in Int.MIN_VALUE.toDouble()..Int.MAX_VALUE.toDouble())
+    return value.toInt()
+}
+
+private fun JSONObject.strictLong(key: String): Long {
+    val number = get(key) as? Number ?: error("$key must be an integer")
+    val text = number.toString()
+    return text.toLongOrNull()?.takeIf { it >= 0 } ?: error("$key must be a non-negative integer")
+}
+
+private fun JSONObject.strictFloat(key: String): Float {
+    val number = get(key) as? Number ?: error("$key must be a number")
+    return number.toFloat().takeIf(Float::isFinite) ?: error("$key must be finite")
+}
+
+private fun JSONObject.strictBoolean(key: String) = get(key) as? Boolean ?: error("$key must be a boolean")

@@ -1,0 +1,170 @@
+package com.mccal.folio
+
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import java.io.File
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
+/**
+ * Local crash reports, no analytics: the last few crashes are written to Folio's private storage and nothing
+ * leaves the phone unless you share a report yourself (Settings › Help › Crash Reports).
+ */
+internal object CrashLog {
+    private const val DIR = "crashes"
+    private const val KEEP = 5
+
+    fun install(context: Context) {
+        val app = context.applicationContext
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        SafeMode.onStart(app)
+        Diagnostics.onStart(app)
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            runCatching { write(app, thread, error) }
+            runCatching { SafeMode.onCrash(app) }
+            previous?.uncaughtException(thread, error)
+        }
+    }
+
+    internal fun dir(context: Context) = File(context.filesDir, DIR).apply { mkdirs() }
+
+    /** Folio version, phone and screen: the lines every report starts with. */
+    internal fun environment(context: Context): String {
+        val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull()
+        return "Folio: $version\n" +
+            "Device: ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}, API ${Build.VERSION.SDK_INT})\n" +
+            "Build: ${Diagnostics.buildDisplay()}\n" +
+            "Screen: ${Diagnostics.screenSummary(context)}"
+    }
+
+    /** Writes one report file of [kind] and keeps only the newest few. */
+    internal fun save(context: Context, kind: String, text: String) {
+        val folder = dir(context)
+        File(folder, "$kind-${System.currentTimeMillis()}.txt").writeText(text)
+        reports(context).drop(KEEP).forEach { it.delete() }
+    }
+
+    internal fun report(context: Context, threadName: String, error: Throwable, now: LocalDateTime = LocalDateTime.now()): String =
+        buildString {
+            appendLine("Folio crash report")
+            appendLine("Time: ${now.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)}")
+            appendLine(environment(context))
+            appendLine("Thread: $threadName")
+            appendLine()
+            appendLine(error.stackTraceToString())
+            Diagnostics.trailText().takeIf { it.isNotBlank() }?.let { appendLine("Before it:"); append(it) }
+        }
+
+    private fun write(context: Context, thread: Thread, error: Throwable) = save(context, "crash", report(context, thread.name, error))
+
+    /** Newest first; only report files (not the saved trail). */
+    fun reports(context: Context): List<File> = dir(context).listFiles()
+        ?.filter { it.name.endsWith(".txt") && it.name.substringBefore('-') in KINDS }
+        ?.sortedByDescending { it.name.substringAfter('-') }.orEmpty()
+
+    private val KINDS = setOf("crash", "exit", "restart")
+
+    fun clear(context: Context) { reports(context).forEach { it.delete() } }
+
+    /** Share sheet with the report text, so you choose where it goes. */
+    fun shareIntent(file: File): Intent = Intent.createChooser(
+        Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "Folio crash report")
+            .putExtra(Intent.EXTRA_TEXT, file.readText().take(60_000)), "Share crash report")
+}
+
+/**
+ * Jailbreak-style Safe Mode: if Folio crashes twice within 30 seconds of starting, the next start pauses optional
+ * features (without changing any settings) and asks whether to continue safely or restart normally.
+ */
+internal object SafeMode {
+    private const val PREFS = "safe_mode"
+    private const val QUICK_CRASHES = "quickCrashes"
+    private const val WINDOW_MS = 30_000L
+    private const val LAST_START = "lastStartWall"
+    private const val EXITS_SEEN = "exitsSeenUntil"
+    private var startedAt = 0L
+    @Volatile var active = false
+        private set
+
+    private const val CRASHED_LAST_RUN = "crashedLastRun"
+    @Volatile private var crashedLastRun = false
+    @Volatile private var appContext: Context? = null
+    private val crashTaken = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * True once per process, and only when the process before this one ended in an uncaught crash. Package Safe Mode
+     * counts a crash only then: asked on every Home composition (a fold, an unfold) it would blame a package for
+     * nothing.
+     */
+    fun takeCrashedLastRun(): Boolean {
+        if (!crashedLastRun || !crashTaken.compareAndSet(false, true)) return false
+        // Cleared only now that Home has read it: a background job that starts the process after a crash, and is then
+        // killed before Home exists, must not use the flag up.
+        appContext?.getSharedPreferences(PREFS, 0)?.edit()?.putBoolean(CRASHED_LAST_RUN, false)?.apply()
+        return true
+    }
+
+    /**
+     * [exits] is how earlier processes ended, newest first; the default reads Android's record. A native crash, a freeze
+     * or a failed start in the first 30 seconds counts like an uncaught exception does (see [SafeModeExits]).
+     */
+    fun onStart(context: Context, exits: () -> List<ExitRecord> = { SafeModeExits.read(context) }) {
+        startedAt = android.os.SystemClock.elapsedRealtime()
+        val prefs = context.getSharedPreferences(PREFS, 0)
+        val previousStart = prefs.getLong(LAST_START, 0L)
+        val seen = prefs.getLong(EXITS_SEEN, 0L)
+        val all = runCatching(exits).getOrDefault(emptyList())
+        val extra = SafeModeExits.quick(all, previousStart, seen, WINDOW_MS).size
+        val quickCrashes = prefs.getInt(QUICK_CRASHES, 0) + extra
+        val edit = prefs.edit().putLong(LAST_START, System.currentTimeMillis())
+        if (all.isNotEmpty()) edit.putLong(EXITS_SEEN, maxOf(seen, all.maxOf { it.timestampMs }))
+        if (extra > 0) edit.putInt(QUICK_CRASHES, quickCrashes)
+        active = quickCrashes >= 2
+        crashTaken.set(false)
+        appContext = context.applicationContext
+        val nativeCrash = SafeModeExits.crashedLast(all, seen)
+        // A crash Android recorded is kept as the same saved flag, not just in memory: the exits are marked as seen
+        // above, so a background-only process that never reaches Home must not use the evidence up.
+        if (nativeCrash) edit.putBoolean(CRASHED_LAST_RUN, true)
+        crashedLastRun = prefs.getBoolean(CRASHED_LAST_RUN, false) || nativeCrash
+        // Synchronously: a crash right after this returns must find the start time, the exits seen and the count on disk,
+        // or a fast startup loop would never add up to two. A few small values, once per process.
+        edit.commit()
+    }
+
+    /**
+     * Whether Folio is in Safe Mode right now, read from what was saved. For work that can start without the app being
+     * open (a background job), where [onStart] may not have run in this process yet.
+     */
+    fun isOn(context: Context): Boolean = context.getSharedPreferences(PREFS, 0).getInt(QUICK_CRASHES, 0) >= 2
+
+    fun onCrash(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, 0)
+        val quick = android.os.SystemClock.elapsedRealtime() - startedAt < WINDOW_MS
+        // In Safe Mode a crash, even after a long run, keeps the count at the threshold: only Restart Normally leaves it.
+        val count = if (active) maxOf(prefs.getInt(QUICK_CRASHES, 0), 2) else if (quick) prefs.getInt(QUICK_CRASHES, 0) + 1 else 1
+        prefs.edit().putInt(QUICK_CRASHES, count).putBoolean(CRASHED_LAST_RUN, true).commit()
+    }
+
+    /**
+     * Folio ran a while without crashing: forget earlier quick crashes (called from Home). Not while Safe Mode is on:
+     * the count is what keeps Market refresh and auto-update paused ([isOn]), so only Restart Normally ([exit]) clears it.
+     */
+    fun markStable(context: Context) {
+        if (active) return
+        if (android.os.SystemClock.elapsedRealtime() - startedAt < WINDOW_MS) return
+        context.getSharedPreferences(PREFS, 0).edit().remove(QUICK_CRASHES).apply()
+    }
+
+    fun exit(context: Context) {
+        context.getSharedPreferences(PREFS, 0).edit().remove(QUICK_CRASHES).commit()
+        active = false
+    }
+
+    /** Settings as they apply while in Safe Mode; saved settings are untouched. */
+    fun effective(state: LauncherState): LauncherState = if (!active) state else state.copy(
+        appPanels = false, dockMagnify = false, tintNotifications = false, tintMedia = false, triggerActions = emptyMap(),
+        foldEffect = false, lockCover = false, islandEverywhere = false, dockEverywhere = false, widgetStacks = state.widgetStacks,
+        stackRotate = false, notificationAppRow = false, pageEffect = PageEffect.NONE)
+}

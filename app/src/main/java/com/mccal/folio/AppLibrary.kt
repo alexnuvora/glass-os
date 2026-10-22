@@ -1,0 +1,255 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
+package com.mccal.folio
+
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.boundsInWindow
+
+/** Incremented to focus the All apps search field (e.g. after a middle swipe-down on Home). */
+internal val librarySearchFocusRequests = mutableIntStateOf(0)
+
+@Composable
+internal fun AppLibrary(
+    state: LauncherState, query: String, onQuery: (String) -> Unit,
+    onLaunch: (AppEntry) -> Unit, onPin: (String, Boolean) -> Unit, onActions: (AppEntry) -> Unit,
+    modifier: Modifier = Modifier, editing: Boolean = false,
+    drag: HomeDragState? = null, page: Int? = null,
+    onLaunchFrom: (AppEntry, android.graphics.Rect?) -> Unit = { app, _ -> onLaunch(app) },
+    onTurnOnWork: (Long) -> Unit = {},
+) {
+    val appOptionsLabel = stringResource(R.string.app_options)
+    val glass = !editing
+    val palette = LocalDuoPalette.current
+    val ink = if (glass) Ink else MaterialTheme.colorScheme.onSurface
+    val pinned = remember(state.homeSlots, state.leadingSlots) {
+        (state.homeSlots.asSequence() + state.leadingSlots.asSequence()).filterNotNull().toSet()
+    }
+    // Only a work profile gets the Work switch; clones (Dual Messenger) stay in the main list beside their originals.
+    val hasWork = state.profiles.any { it.isWork } || state.apps.any { it.kind == ProfileKind.WORK }
+    // With Work turned off in Settings the switch goes away and only personal apps are listed.
+    val workSwitch = hasWork && state.libraryWork
+    var showWork by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focusRequest = librarySearchFocusRequests.intValue
+    LaunchedEffect(focusRequest) {
+        if (focusRequest > 0 && !editing) {
+            kotlinx.coroutines.delay(280) // let the page settle first
+            runCatching { searchFocus.requestFocus(); keyboard?.show() }
+        }
+    }
+    val listState = rememberLazyListState()
+    val selectedProfile = if (showWork) state.profiles.firstOrNull { it.isWork } else state.profiles.firstOrNull { it.isPersonal }
+    LaunchedEffect(showWork, selectedProfile?.available, selectedProfile?.quiet) {
+        listState.scrollToItem(0)
+    }
+    // The list keeps its place by item, so typing replaced the tiles and left the results scrolled past the web search row.
+    LaunchedEffect(query) { listState.scrollToItem(0) }
+    // Leaving the library, for an app or the Home button, clears the search like iOS does; it used to wait there for the next visit.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    val latestQuery by rememberUpdatedState(query)
+    DisposableEffect(lifecycle, editing) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP && !editing && latestQuery.isNotEmpty()) onQuery("")
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    // Hidden apps stay out of the App Library entirely, like iOS; they're listed (after unlocking) in Settings.
+    val visibleApps = remember(state.apps, state.loading, query, showWork, workSwitch, hasWork, state.hiddenApps, editing) {
+        val text = query.trim()
+        // At a start Home's apps come first; the library waits for all of them rather than show a part as everything.
+        // A renamed app answers to both names here, the same as in Spotlight.
+        (if (state.loading) emptyList() else state.apps).filter { (if (workSwitch) (it.kind == ProfileKind.WORK) == showWork else !(hasWork && it.kind == ProfileKind.WORK)) &&
+            appMatches(it, text) && (editing || it.id !in state.hiddenApps) }
+    }
+    // iOS-style App Library: category tiles while browsing; the A–Z list for search, hidden and editing.
+    var openCategory by remember { mutableStateOf<LibraryCategory?>(null) }
+    val browsing = state.libraryCategories && !editing && query.isBlank()
+    val cleared by SuggestionsHistory.generation.collectAsStateWithLifecycle()
+    val categorized by produceState(emptyMap<LibraryCategory, List<AppEntry>>(), visibleApps, browsing, cleared) {
+        if (!browsing) return@produceState
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val pm = context.packageManager
+            val byId = visibleApps.associateBy { it.id }
+            val suggestions = RecentApps.load(context).mapNotNull(byId::get).take(8)
+            val collator = java.text.Collator.getInstance()
+            val grouped = visibleApps.groupBy { LibraryCategory.of(pm, (it.iconFrom ?: it).component.packageName) }
+                .mapValues { (_, apps) -> apps.sortedWith(compareBy(collator) { it.label }) }
+            buildMap {
+                if (suggestions.isNotEmpty()) put(LibraryCategory.SUGGESTIONS, suggestions)
+                grouped.entries.sortedWith(compareBy({ it.key == LibraryCategory.OTHER }, { -it.value.size })).forEach { put(it.key, it.value) }
+            }
+        }
+    }
+    val groups = remember(visibleApps) {
+        visibleApps.groupBy {
+            Pinyin.heading(it.label)
+        }
+    }
+    // Like iOS, a category opens as an expanded folder over the library instead of replacing it.
+    openCategory?.takeIf { browsing }?.let { category ->
+        CategoryFolder(stringResource(category.title), categorized[category].orEmpty(), onDismiss = { openCategory = null },
+            onLaunch = { openCategory = null; onLaunchFrom(it, null) }, onActions = { openCategory = null; onActions(it) })
+    }
+    Surface(modifier, shape = RoundedCornerShape(FolioRadius.PANEL.dp),
+        color = if (glass) Glass.copy(alpha = .48f) else MaterialTheme.colorScheme.surface,
+        contentColor = ink,
+        border = if (glass) BorderStroke(1.dp, Color.White.copy(alpha = .38f)) else null) {
+        Column(Modifier.background(Brush.verticalGradient(if (glass)
+            listOf(Color.White.copy(alpha = .09f), Color.Transparent) else listOf(Color.Transparent, Color.Transparent)))
+            .padding(horizontal = FolioSpace.LARGE.dp).padding(top = 18.dp)) {
+            // iOS App Library has no title bar, just its search field; choosing Home apps keeps a title and count.
+            if (editing) Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.choose_home_apps_title), Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(pluralStringResource(R.plurals.pinned, pinned.size, pinned.size), color = ink, fontSize = FolioType.GROUP_LABEL.sp)
+            }
+            if (workSwitch) Row(Modifier.fillMaxWidth().padding(top = FolioSpace.COMPACT.dp), horizontalArrangement = Arrangement.spacedBy(FolioSpace.SMALL.dp)) {
+                IosChip(selected = !showWork, onClick = { showWork = false }, label = { Text(stringResource(R.string.personal)) })
+                IosChip(selected = showWork, onClick = { showWork = true }, label = { Text(stringResource(R.string.work)) })
+            }
+            IosSearchField(query, onQuery, if (editing) stringResource(R.string.search_apps) else stringResource(R.string.app_library), Modifier.padding(vertical = FolioSpace.MEDIUM.dp),
+                fieldModifier = (if (editing) Modifier else Modifier.focusRequester(searchFocus)).testTag(if (editing) "pin-search" else "library-search"),
+                ink = ink, onSearch = {
+                    if (!editing && query.isNotBlank()) openEnterSearch(context, state, query)
+                })
+            var libraryWidth by remember { mutableStateOf(360.dp) }
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            LazyColumn(Modifier.weight(1f).edgeFade(listState).onSizeChanged { libraryWidth = with(density) { it.width.toDp() } }.testTag("all-apps-list"), state = listState,
+                contentPadding = PaddingValues(bottom = 12.dp)) {
+                if (showWork && selectedProfile?.available == false) item("work-paused") {
+                    Column(Modifier.fillMaxWidth().padding(vertical = FolioSpace.XL.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (selectedProfile.quiet) stringResource(R.string.work_apps_are_paused) else stringResource(R.string.work_profile_is_unavailable))
+                        if (selectedProfile.quiet) FolioButton(stringResource(R.string.turn_on_work_apps), { onTurnOnWork(selectedProfile.userSerial) },
+                            Modifier.padding(top = FolioSpace.COMPACT.dp), tag = "turn-on-work")
+                    }
+                }
+                if (!editing && query.isBlank()) item("downloading") { DownloadingApps(ink) }
+                if (!editing && query.isNotBlank()) item("web-search") {
+                    WebSearchRow(query, state.searchEngine) { openWebSearch(context, it, query) }
+                }
+                if (browsing && categorized.isNotEmpty()) {
+                    // Tiles stay iPhone-sized: more columns on the wide inner screen instead of giant tiles.
+                    val columns = libraryColumns(libraryWidth.value)
+                    items(categorized.entries.toList().chunked(columns), key = { row -> "cat-" + row.first().key.name }) { row ->
+                        Row(Modifier.fillMaxWidth().padding(bottom = FolioSpace.COMFY.dp), horizontalArrangement = Arrangement.spacedBy(FolioSpace.COMFY.dp)) {
+                            row.forEach { (cat, apps) ->
+                                CategoryCard(stringResource(cat.title), apps, Modifier.weight(1f), labelColor = ink, onLaunch = { onLaunchFrom(it, null) }) { openCategory = cat }
+                            }
+                            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                } else if (groups.isEmpty()) item { Text(if (state.loading) stringResource(R.string.loading_apps) else stringResource(R.string.no_apps_found), Modifier.padding(vertical = FolioSpace.XL.dp)) }
+                // While the tiles are still being worked out, show nothing rather than the whole A to Z list for a moment.
+                if (!browsing) groups.forEach { (letter, entries) ->
+                    stickyHeader(key = "heading-$letter") {
+                        Row(Modifier.fillMaxWidth().padding(top = FolioSpace.SMALL.dp, bottom = FolioSpace.SNUG.dp), verticalAlignment = Alignment.CenterVertically) {
+                            // An opaque small chip prevents text from showing through the sticky letter.
+                            Box(Modifier.size(width = 32.dp, height = 28.dp).background(
+                                if (glass) (if (palette.dark) Color(0xFF314852) else Color(0xFFB7CBD3))
+                                else MaterialTheme.colorScheme.surfaceContainer,
+                                RoundedCornerShape(FolioRadius.CONTROL.dp)), contentAlignment = Alignment.Center) {
+                                Text(letter, color = ink, fontWeight = FontWeight.SemiBold, fontSize = FolioType.GROUP_LABEL.sp)
+                            }
+                            if (glass) HorizontalDivider(Modifier.weight(1f).padding(start = FolioSpace.COMPACT.dp), color = Color.White.copy(alpha = .24f))
+                        }
+                    }
+                    items(entries, key = { it.id }) { app ->
+                        val isPinned = app.id in pinned
+                        val launchBounds = remember { android.graphics.Rect() }
+                        val iconPlace = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
+                        val dragModifier = if (drag != null) Modifier.dropRegion(drag, DropTarget.Library(app.id), app.id, page) else Modifier
+                        val click = {
+                            if (editing) onPin(app.id, !isPinned)
+                            else {
+                                // Measured when the icon is tapped, not on every frame it moves while scrolling.
+                                iconPlace[0]?.takeIf { it.isAttached }?.let { launchBounds.set(it.boundsInWindow().toAndroidBounds()) }
+                                onLaunchFrom(app, launchBounds)
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).then(dragModifier).clip(RoundedCornerShape(FolioRadius.CARD.dp)).testTag("library-app-${app.id}")
+                            .then(if (drag == null) Modifier.combinedClickable(onClick = click, onLongClick = { onActions(app) })
+                                else Modifier.clickable(onClick = click).semantics { onLongClick(appOptionsLabel) { onActions(app); true } })
+                            .padding(vertical = FolioSpace.SNUG.dp), verticalAlignment = Alignment.CenterVertically) {
+                            AppIcon(app, null, Modifier.size(40.dp)
+                                .onGloballyPositioned { iconPlace[0] = it }.clip(RoundedCornerShape(FolioRadius.CONTROL.dp)))
+                            Row(Modifier.weight(1f).padding(start = FolioSpace.MEDIUM.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (app.iconFrom == null) NewAppDot(app.packageName, 7.dp)
+                                // A clone sits right beside its original with the same name; the line under it tells them apart.
+                                // Not while Screenshot Mode swaps it: the profile's name would give the swap away.
+                                Column {
+                                    Text(app.label, maxLines = 2, fontSize = FolioType.COMPACT.sp)
+                                    if (app.kind == ProfileKind.CLONE && app.iconFrom == null) Text(profileName(app), color = ink.copy(alpha = .6f),
+                                        fontSize = FolioType.FOOTNOTE.sp, maxLines = 1, modifier = Modifier.testTag("library-profile-${app.id}"))
+                                }
+                            }
+                            if (editing) IconButton(onClick = { onPin(app.id, !isPinned) }, Modifier.testTag("pin-${app.id}")) {
+                                // iOS selection: filled blue check when on Home, empty ring when not.
+                                Icon(if (isPinned) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
+                                    if (isPinned) stringResource(R.string.remove_from_home_3, app.label) else stringResource(R.string.pin_to_home, app.label),
+                                    tint = if (isPinned) LocalAccent.current.ink else ink.copy(alpha = .35f),
+                                    modifier = Modifier.size(24.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WebSearchRow(query: String, engine: String, onSearch: (WebSearchTarget) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(bottom = FolioSpace.SMALL.dp)) {
+        Text(stringResource(R.string.search_1_with, query.trim()), fontSize = FolioType.GROUP_LABEL.sp, color = Ink.copy(alpha = .75f),
+            modifier = Modifier.padding(bottom = FolioSpace.SNUG.dp))
+        Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(FolioSpace.SMALL.dp)) {
+            WebSearchTarget.chips(engine).forEach { target ->
+                AssistChip(onClick = { onSearch(target) }, label = { Text(target.label) },
+                    leadingIcon = { Icon(if (target.ai) Icons.Rounded.AutoAwesome else Icons.Rounded.Public,
+                        null, Modifier.size(16.dp)) },
+                    modifier = Modifier.testTag("web-search-${target.name.lowercase()}"))
+            }
+        }
+    }
+}
+
+/** The profile an app is from, as people read it: a clone says Dual, the rest keep the name their profile was given. */
+@Composable
+internal fun profileName(app: AppEntry): String =
+    if (app.kind == ProfileKind.CLONE) stringResource(R.string.profile_dual) else app.profileLabel
