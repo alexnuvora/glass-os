@@ -11,6 +11,7 @@ import android.view.*;
 import android.view.accessibility.AccessibilityManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
+import com.example.liquidglass.LiquidGlassView;
 import android.text.*;
 import java.util.*;
 
@@ -476,7 +477,11 @@ public class MainActivity extends Activity {
     add(shell,pages,-1,36);
     TextView search=text("⌕  Search",14,0xfff5f5f8);setGlass(search,30);
     LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(dp(100),dp(35));sp.gravity=Gravity.CENTER;sp.bottomMargin=dp(19);shell.addView(search,sp);touch(search,this::library);
-    LinearLayout dock=horizontal();dock.setGravity(Gravity.CENTER);dock.setPadding(dp(9),dp(11),dp(9),dp(8));setGlass(dock,35);
+    LiquidGlassView dockGlass=new LiquidGlassView(this);
+    dockGlass.setCornerRadius(dp(35));
+    dockGlass.setEnableDynamicBackground(true);
+    LinearLayout dock=horizontal();dock.setGravity(Gravity.CENTER);dock.setPadding(dp(9),dp(11),dp(9),dp(8));
+    dockGlass.addView(dock,new FrameLayout.LayoutParams(-1,-1));
     String[] dockNames={"Phone","Browser","Messages","Music"};
     String[] dockGlyphs={"☎","◉","●","♫"};int[] dockColors={0xff20d958,0xff238fe8,0xff25d95a,0xffe93453};
     String[][] dockPackages={{"dialer","phone"},{"chrome","browser"},{"messaging","sms"},{"spotify","music"}};
@@ -489,7 +494,7 @@ public class MainActivity extends Activity {
       slot.setOnLongClickListener(v->{pickApp(dockIndex);return true;});
       dock.addView(slot,new LinearLayout.LayoutParams(0,dp(67),1));
     }
-    add(shell,dock,-1,86);reveal(dock,180);
+    add(shell,dockGlass,-1,86);reveal(dockGlass,180);
     shell.setFocusableInTouchMode(true);
     shell.setOnTouchListener((v,e)->{if(e.getAction()==MotionEvent.ACTION_DOWN){downX=e.getX();downY=e.getY();return true;}if(e.getAction()==MotionEvent.ACTION_UP){float dx=e.getX()-downX,dy=e.getY()-downY;if(dy>dp(65))controls();
       else if(dy< -dp(65))library();
