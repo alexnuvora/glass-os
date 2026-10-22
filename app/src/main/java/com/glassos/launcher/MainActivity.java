@@ -22,6 +22,8 @@ public class MainActivity extends Activity {
   private boolean dark=false, large=false, reduceMotion=false;
   private int wallpaperStyle=0;
   private boolean showSeconds=false;
+  private boolean highContrastGlass=false;
+  private float glassStrength=0.70f;
   private final String[] wallpaperNames={"Sky","Midnight","Sunset","Ocean"};
   private Bitmap blurredBackdrop;
   private int iconTint=0;
@@ -37,6 +39,15 @@ public class MainActivity extends Activity {
   // Android Canvas approximation of Apple's dynamic glass material.
   // Optical highlights and touch response are real; backdrop refraction is not available here.
   private Drawable translucent(float radius){return new GlassSurface(radius,null);}
+  // Centralised motion timing so interactions share a consistent rhythm.
+  private long motionDuration(int nominal){return reduceMotion?0:nominal;}
+  private android.view.animation.Interpolator spring(){return new android.view.animation.OvershootInterpolator(.55f);}
+  private void reveal(View view,int delay){
+    if(reduceMotion)return;
+    view.setAlpha(0f);view.setTranslationY(dp(18));view.setScaleX(.975f);view.setScaleY(.975f);
+    view.animate().alpha(1f).translationY(0).scaleX(1f).scaleY(1f)
+      .setStartDelay(delay).setDuration(340).setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
+  }
   private void setGlass(View v,float radius){v.setBackground(new GlassSurface(radius,v));}
   private Bitmap backdrop(){
     int width=Math.max(1,getResources().getDisplayMetrics().widthPixels);
@@ -65,7 +76,8 @@ public class MainActivity extends Activity {
         Bitmap image=backdrop();
         BitmapShader shader=new BitmapShader(image,Shader.TileMode.CLAMP,Shader.TileMode.CLAMP);
         int[] pos=new int[2];anchor.getLocationOnScreen(pos);
-        Matrix matrix=new Matrix();matrix.setTranslate(-pos[0]+dp(2),-pos[1]+dp(2));shader.setLocalMatrix(matrix);
+        Matrix matrix=new Matrix();// Small spatial offset gives a lensing cue without capturing other app content.
+        matrix.setTranslate(-pos[0]+dp(3),-pos[1]+dp(4));shader.setLocalMatrix(matrix);
         canvas.save();
         Path clip=new Path();clip.addRoundRect(box,r,r,Path.Direction.CW);canvas.clipPath(clip);
         paint.setStyle(Paint.Style.FILL);paint.setShader(shader);canvas.drawRect(box,paint);
@@ -73,15 +85,20 @@ public class MainActivity extends Activity {
       }
       // Layered tinted translucency with brighter rim at the top edge.
       paint.setStyle(Paint.Style.FILL);
+      paint.setAlpha(255);
       paint.setShader(new LinearGradient(0,bounds.top,0,bounds.bottom,
         dark?new int[]{0x88b9c4e1,0x447e8aab,0x55818cae}:
-             new int[]{0x55ffffff,0x24d6e4fa,0x55e8efff},
+             new int[]{highContrastGlass?0xbbffffff:0x55ffffff,0x24d6e4fa,highContrastGlass?0x99e8efff:0x55e8efff},
         new float[]{0f,.44f,1f},Shader.TileMode.CLAMP));
-      canvas.drawRoundRect(box,r,r,paint);paint.setShader(null);
+      paint.setAlpha((int)(255*glassStrength));canvas.drawRoundRect(box,r,r,paint);paint.setShader(null);paint.setAlpha(255);
       paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(1.3f));
       paint.setShader(new LinearGradient(0,bounds.top,0,bounds.bottom,
         new int[]{0xf5ffffff,0x77ffffff,0x44ffffff},null,Shader.TileMode.CLAMP));
       canvas.drawRoundRect(box,r,r,paint);paint.setShader(null);
+      // Faint lower lens shadow and a second soft edge create separation.
+      paint.setShader(null);paint.setColor(dark?0x550a102a:0x30415885);
+      paint.setStrokeWidth(dp(1.7f));
+      canvas.drawArc(new RectF(box.left+dp(1),box.top+dp(1),box.right-dp(1),box.bottom-dp(1)),10,160,false,paint);
       // Inner specular arc, clipped to the top portion.
       canvas.save();canvas.clipRect(bounds.left,bounds.top,bounds.right,bounds.top+h*.46f);
       paint.setStrokeWidth(dp(.65f));paint.setColor(0x99ffffff);
@@ -97,15 +114,15 @@ public class MainActivity extends Activity {
     v.setClickable(true);
     v.setOnTouchListener((target,event)->{
       if(event.getAction()==MotionEvent.ACTION_DOWN){
-        target.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);if(reduceMotion)return true;target.animate().scaleX(.96f).scaleY(.96f).setDuration(110).start();return true;
+        target.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);if(reduceMotion)return true;target.animate().scaleX(.955f).scaleY(.955f).alpha(.88f).setDuration(110).start();return true;
       }
       if(event.getAction()==MotionEvent.ACTION_UP){
-        target.animate().scaleX(1f).scaleY(1f).setDuration(reduceMotion?0:220).setInterpolator(new android.view.animation.OvershootInterpolator(.6f)).start();
+        target.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(motionDuration(280)).setInterpolator(spring()).start();
         if(event.getX()>=0&&event.getX()<=target.getWidth()&&event.getY()>=0&&event.getY()<=target.getHeight()) action.run();
         return true;
       }
       if(event.getAction()==MotionEvent.ACTION_CANCEL){
-        target.animate().scaleX(1f).scaleY(1f).setDuration(150).start();return true;
+        target.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(motionDuration(150)).start();return true;
       }
       return true;
     });
@@ -119,7 +136,7 @@ public class MainActivity extends Activity {
     LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(h));p.bottomMargin=dp(bottom);host.addView(child,p);
   }
   private TextView pill(String label,Runnable action){TextView t=text(label,15,foreground());setGlass(t,30);touch(t,action);return t;}
-  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);iconTint=getPreferences(0).getInt("iconTint",0);showSeconds=getPreferences(0).getBoolean("showSeconds",false);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
+  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);iconTint=getPreferences(0).getInt("iconTint",0);showSeconds=getPreferences(0).getBoolean("showSeconds",false);highContrastGlass=getPreferences(0).getBoolean("highContrastGlass",false);glassStrength=getPreferences(0).getFloat("glassStrength",.70f);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
   private void refresh(){
     apps.clear();Intent i=new Intent(Intent.ACTION_MAIN);i.addCategory(Intent.CATEGORY_LAUNCHER);
     apps.addAll(pm.queryIntentActivities(i,0));apps.removeIf(a->getPackageName().equals(a.activityInfo.packageName));
@@ -263,6 +280,17 @@ public class MainActivity extends Activity {
       if(folder)editFolder(which);else pickApp(which);
     }).setNegativeButton("Cancel",null).show();
   }
+  private void chooseGlassStrength(){
+    final SeekBar slider=new SeekBar(this);slider.setMax(90);slider.setProgress(Math.round(glassStrength*100)-10);
+    LinearLayout panel=column();panel.setPadding(dp(24),dp(15),dp(24),0);
+    TextView label=text("Glass material opacity",16,foreground());add(panel,label,-1,42);add(panel,slider,-1,56);
+    new AlertDialog.Builder(this).setTitle("Liquid Glass appearance").setView(panel)
+      .setNegativeButton("Cancel",null)
+      .setPositiveButton("Apply",(dialog,which)->{
+        glassStrength=(slider.getProgress()+10)/100f;
+        getPreferences(0).edit().putFloat("glassStrength",glassStrength).apply();settings();
+      }).show();
+  }
   private void resetLayout(){
     new AlertDialog.Builder(this).setTitle("Reset Home Screen?")
       .setMessage("Restore the default app positions and dock?")
@@ -369,7 +397,7 @@ public class MainActivity extends Activity {
     TextView events=text("Calendar",16,0xff9c9c9f);events.setGravity(Gravity.LEFT);add(calendar,events,-1,45);
     calendar.setOnClickListener(v->{ResolveInfo app=match("calendar");if(app!=null)launch(app);else library();});
     tiles.addView(calendar,new LinearLayout.LayoutParams(0,dp(155),1));
-    add(shell,tiles,-1,155);
+    add(shell,tiles,-1,155);reveal(tiles,70);
     LinearLayout widgetNames=horizontal();
     TextView left=text("Battery",12,WHITE);TextView right=text("Calendar",12,WHITE);
     widgetNames.addView(left,new LinearLayout.LayoutParams(0,dp(30),1));widgetNames.addView(right,new LinearLayout.LayoutParams(0,dp(30),1));add(shell,widgetNames,-1,32);
@@ -405,7 +433,7 @@ public class MainActivity extends Activity {
       }
       add(iconRows,strip,-1,94);
     }
-    shell.addView(iconRows,new LinearLayout.LayoutParams(-1,0,1));
+    shell.addView(iconRows,new LinearLayout.LayoutParams(-1,0,1));reveal(iconRows,130);
     TextView search=text("⌕  Search",14,0xfff5f5f8);setGlass(search,30);
     LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(dp(100),dp(35));sp.gravity=Gravity.CENTER;sp.bottomMargin=dp(19);shell.addView(search,sp);touch(search,this::library);
     LinearLayout dock=horizontal();dock.setGravity(Gravity.CENTER);dock.setPadding(dp(9),dp(11),dp(9),dp(8));setGlass(dock,35);
@@ -421,7 +449,7 @@ public class MainActivity extends Activity {
       slot.setOnLongClickListener(v->{pickApp(dockIndex);return true;});
       dock.addView(slot,new LinearLayout.LayoutParams(0,dp(67),1));
     }
-    add(shell,dock,-1,86);
+    add(shell,dock,-1,86);reveal(dock,180);
     shell.setFocusableInTouchMode(true);
     shell.setOnTouchListener((v,e)->{if(e.getAction()==MotionEvent.ACTION_DOWN){downX=e.getX();downY=e.getY();return true;}if(e.getAction()==MotionEvent.ACTION_UP){float dx=e.getX()-downX,dy=e.getY()-downY;if(dy>dp(65))controls();else if(dy< -dp(65)||dx< -dp(95))library();else if(dx>dp(95))notifications();return true;}return true;});
   }
@@ -478,12 +506,16 @@ public class MainActivity extends Activity {
     line("Customise Home Screen",this::editHome);
     line("Status clock seconds: "+(showSeconds?"On":"Off"),()->{showSeconds=!showSeconds;getPreferences(0).edit().putBoolean("showSeconds",showSeconds).apply();settings();});
     line("Icon appearance: "+tintLabels[iconTint],this::iconAppearance);
+    line("Glass contrast: "+(highContrastGlass?"High":"Standard"),()->{
+      highContrastGlass=!highContrastGlass;getPreferences(0).edit().putBoolean("highContrastGlass",highContrastGlass).apply();settings();
+    });
+    line("Glass opacity: "+Math.round(glassStrength*100)+"%",this::chooseGlassStrength);
     
     line("Reset Home Screen layout",this::resetLayout);
     line("App permissions",()->startActivity(new Intent(Settings.ACTION_APPLICATION_SETTINGS)));
     line("Battery settings",()->startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)));
     space(shell,18);
-    TextView note=text("GlassOS 0.6  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
+    TextView note=text("GlassOS 0.7  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
   }
   @Override public void onBackPressed(){if(page.equals("home"))super.onBackPressed();else home();}
 }
