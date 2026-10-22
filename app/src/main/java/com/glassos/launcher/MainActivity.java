@@ -203,18 +203,18 @@ public class MainActivity extends Activity {
     ResolveInfo installed=savedApp(index,packages);
     String folder=getPreferences(0).getString("folder_"+index,"");
     String customLabel=getPreferences(0).getString("label_"+index,"");
-    if(!folder.isEmpty())label="Folder";
+    final String tileLabel=folder.isEmpty()?label:"Folder";
     FrameLayout icon=new FrameLayout(this);setGlass(icon,16);icon.setClipToOutline(true);
     if(folder.length()>0){TextView fIcon=iconFallback("▦",0x996c87c1);icon.addView(fIcon,new FrameLayout.LayoutParams(-1,-1));}
     else if(installed!=null){ImageView image=new ImageView(this);image.setImageDrawable(installed.loadIcon(pm));image.setScaleType(ImageView.ScaleType.FIT_XY);
       applyIconTint(image);icon.addView(image,new FrameLayout.LayoutParams(-1,-1));}
     else {TextView fallback=iconFallback(glyph,color);icon.addView(fallback,new FrameLayout.LayoutParams(-1,-1));}
     LinearLayout.LayoutParams ip=new LinearLayout.LayoutParams(dp(60),dp(60));tile.addView(icon,ip);
-    TextView name=text(!customLabel.isEmpty()?customLabel:(folder.isEmpty() && installed!=null?installed.loadLabel(pm).toString():label),12,Color.WHITE);name.setSingleLine();name.setEllipsize(TextUtils.TruncateAt.END);name.setShadowLayer(4,0,1,0xaa1f1b20);
+    TextView name=text(!customLabel.isEmpty()?customLabel:(folder.isEmpty() && installed!=null?installed.loadLabel(pm).toString():tileLabel),12,Color.WHITE);name.setSingleLine();name.setEllipsize(TextUtils.TruncateAt.END);name.setShadowLayer(4,0,1,0xaa1f1b20);
     LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,dp(22));np.topMargin=dp(5);tile.addView(name,np);
     tile.setOnClickListener(v->{if(!folder.isEmpty())openFolder(index);else if(installed!=null)launch(installed);else library();});
-    tile.setContentDescription("Open "+label);
-    tile.setOnLongClickListener(v->{showAppMenu(v,label,installed,index);return true;});
+    tile.setContentDescription("Open "+tileLabel);
+    tile.setOnLongClickListener(v->{showAppMenu(v,tileLabel,installed,index);return true;});
     return tile;
   }
   private void showAppMenu(View anchor,String label,ResolveInfo installed,int index){
