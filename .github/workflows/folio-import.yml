@@ -78,6 +78,11 @@ jobs:
           git add -A
           git commit -m "Full-source Folio port into GlassOS (MIT, staged)"
           git push --force-with-lease origin HEAD:refs/heads/folio-full-port
+      - name: Switch to imported Folio source before compiling
+        run: |
+          git fetch origin folio-full-port
+          git checkout -B folio-full-port origin/folio-full-port
+          test -f ./gradlew && chmod +x ./gradlew
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
