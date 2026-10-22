@@ -20,6 +20,8 @@ public class MainActivity extends Activity {
   private LinearLayout shell;
   private String page="home";
   private boolean dark=false, large=false, reduceMotion=false;
+  private int wallpaperStyle=0;
+  private final String[] wallpaperNames={"Sky","Midnight","Sunset","Ocean"};
   private float downX, downY;
   private final int WHITE=Color.WHITE;
   private int dp(float n){return (int)(n*getResources().getDisplayMetrics().density+0.5f);}
@@ -88,7 +90,7 @@ public class MainActivity extends Activity {
     LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(h));p.bottomMargin=dp(bottom);host.addView(child,p);
   }
   private TextView pill(String label,Runnable action){TextView t=text(label,15,foreground());t.setBackground(translucent(30));touch(t,action);return t;}
-  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
+  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
   private void refresh(){
     apps.clear();Intent i=new Intent(Intent.ACTION_MAIN);i.addCategory(Intent.CATEGORY_LAUNCHER);
     apps.addAll(pm.queryIntentActivities(i,0));apps.removeIf(a->getPackageName().equals(a.activityInfo.packageName));
@@ -105,7 +107,7 @@ public class MainActivity extends Activity {
     Paint p=new Paint(3);
     @Override public void draw(Canvas c){
       android.graphics.Rect b=getBounds();float w=b.width(),h=b.height();
-      p.setShader(new LinearGradient(0,0,w,h,dark?new int[]{0xff17213e,0xff323959,0xff101d33}:new int[]{0xffc9ddf6,0xffe8c6de,0xff9dc8e6},null,Shader.TileMode.CLAMP));c.drawRect(b,p);p.setShader(null);
+      p.setShader(new LinearGradient(0,0,w,h,wallpaperStyle==1?new int[]{0xff121c32,0xff303c67,0xff15172e}:wallpaperStyle==2?new int[]{0xfff3a1a4,0xffba7ec8,0xff604faa}:wallpaperStyle==3?new int[]{0xff216eac,0xff33b2b5,0xff20407b}:(dark?new int[]{0xff17213e,0xff323959,0xff101d33}:new int[]{0xffc9ddf6,0xffe8c6de,0xff9dc8e6}),null,Shader.TileMode.CLAMP));c.drawRect(b,p);p.setShader(null);
       glow(c,w*.26f,h*.24f,w*.87f,dark?0x777e6ac7:0xcc9cabf1);
       glow(c,w*.92f,h*.55f,w*.77f,dark?0x776fa2bd:0xbb62d7cf);
       glow(c,w*.23f,h*.9f,w*.7f,dark?0x666a79b8:0xbb8c97df);
@@ -144,9 +146,9 @@ public class MainActivity extends Activity {
   private TextView iconFallback(String symbol,int background){
     TextView v=text(symbol,29,Color.WHITE);v.setBackground(shape(background,17));return v;
   }
-  private View referenceIcon(String label,String glyph,int color,String... packages){
+  private View referenceIcon(String label,String glyph,int color,int index,String... packages){
     LinearLayout tile=column();tile.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
-    ResolveInfo installed=match(packages);
+    ResolveInfo installed=savedApp(index,packages);
     FrameLayout icon=new FrameLayout(this);icon.setBackground(translucent(16));icon.setClipToOutline(true);
     if(installed!=null){ImageView image=new ImageView(this);image.setImageDrawable(installed.loadIcon(pm));image.setScaleType(ImageView.ScaleType.FIT_XY);icon.addView(image,new FrameLayout.LayoutParams(-1,-1));}
     else {TextView fallback=iconFallback(glyph,color);icon.addView(fallback,new FrameLayout.LayoutParams(-1,-1));}
@@ -155,22 +157,23 @@ public class MainActivity extends Activity {
     LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,dp(22));np.topMargin=dp(5);tile.addView(name,np);
     tile.setOnClickListener(v->{if(installed!=null)launch(installed);else library();});
     tile.setContentDescription("Open "+label);
-    tile.setOnLongClickListener(v->{showAppMenu(v,label,installed);return true;});
+    tile.setOnLongClickListener(v->{showAppMenu(v,label,installed,index);return true;});
     return tile;
   }
-  private void showAppMenu(View anchor,String label,ResolveInfo installed){
+  private void showAppMenu(View anchor,String label,ResolveInfo installed,int index){
     PopupMenu menu=new PopupMenu(this,anchor);
     menu.getMenu().add("Open "+label);
     menu.getMenu().add("App info");
     menu.getMenu().add("All apps");
     menu.getMenu().add("Home screen settings");
+    menu.getMenu().add("Change app in this position");
     menu.setOnMenuItemClickListener(item->{
       String choice=item.getTitle().toString();
       if(choice.startsWith("Open")){if(installed!=null)launch(installed);else library();}
       else if(choice.equals("App info") && installed!=null){
         Intent intent=new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
         intent.setData(android.net.Uri.parse("package:"+installed.activityInfo.packageName));startActivity(intent);
-      }else if(choice.equals("Home screen settings"))settings();else library();
+      }else if(choice.equals("Home screen settings"))settings();else if(choice.equals("Change app in this position"))pickApp(index);else library();
       return true;
     });
     anchor.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
@@ -180,6 +183,40 @@ public class MainActivity extends Activity {
     if(reduceMotion)return;view.setAlpha(0f);view.setTranslationY(dp(12));
     view.animate().alpha(1f).translationY(0).setDuration(220)
       .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
+  }
+  private ResolveInfo savedApp(int position,String... fallbacks){
+    String pkg=getPreferences(0).getString("slot_"+position,"");
+    if(!pkg.isEmpty())for(ResolveInfo a:apps)if(a.activityInfo.packageName.equals(pkg))return a;
+    return match(fallbacks);
+  }
+  private void pickApp(int position){
+    refresh();
+    final String[] titles=new String[apps.size()+1];
+    titles[0]="Restore default";
+    for(int i=0;i<apps.size();i++)titles[i+1]=apps.get(i).loadLabel(pm).toString();
+    new AlertDialog.Builder(this).setTitle(position>=16?"Choose dock app":"Choose home-screen app")
+      .setItems(titles,(dialog,which)->{
+        android.content.SharedPreferences.Editor e=getPreferences(0).edit();
+        e.putString("slot_"+position,which==0?"":apps.get(which-1).activityInfo.packageName).apply();
+        home();
+      }).setNegativeButton("Cancel",null).show();
+  }
+  private void chooseWallpaper(){
+    new AlertDialog.Builder(this).setTitle("Wallpaper")
+      .setSingleChoiceItems(wallpaperNames,wallpaperStyle,(dialog,index)->{
+        wallpaperStyle=index;getPreferences(0).edit().putInt("wallpaperStyle",index).apply();
+        dialog.dismiss();settings();
+      }).setNegativeButton("Cancel",null).show();
+  }
+  private void resetLayout(){
+    new AlertDialog.Builder(this).setTitle("Reset Home Screen?")
+      .setMessage("Restore the default app positions and dock?")
+      .setNegativeButton("Cancel",null)
+      .setPositiveButton("Reset",(dialog,which)->{
+        android.content.SharedPreferences.Editor edit=getPreferences(0).edit();
+        for(int i=0;i<20;i++)edit.remove("slot_"+i);
+        edit.apply();home();
+      }).show();
   }
   private void home(){
     canvas("home");
@@ -232,7 +269,7 @@ public class MainActivity extends Activity {
       LinearLayout strip=horizontal();strip.setGravity(Gravity.TOP);
       for(int col=0;col<4;col++){
         final int rr=row,cc=col;
-        View item=referenceIcon(names[rr][cc],emojis[rr][cc],colors[rr][cc],packages[rr][cc]);
+        View item=referenceIcon(names[rr][cc],emojis[rr][cc],colors[rr][cc],rr*4+cc,packages[rr][cc]);
         strip.addView(item,new LinearLayout.LayoutParams(0,dp(91),1));
       }
       add(iconRows,strip,-1,94);
@@ -245,11 +282,12 @@ public class MainActivity extends Activity {
     String[] dockGlyphs={"☎","◉","●","♫"};int[] dockColors={0xff20d958,0xff238fe8,0xff25d95a,0xffe93453};
     String[][] dockPackages={{"dialer","phone"},{"chrome","browser"},{"messaging","sms"},{"spotify","music"}};
     for(int i=0;i<4;i++){
-      ResolveInfo item=match(dockPackages[i]);FrameLayout slot=new FrameLayout(this);
+      ResolveInfo item=savedApp(16+i,dockPackages[i]);final int dockIndex=16+i;FrameLayout slot=new FrameLayout(this);
       View icon;
       if(item!=null){ImageView img=new ImageView(this);img.setImageDrawable(item.loadIcon(pm));icon=img;touch(slot,()->launch(item));}
       else{icon=iconFallback(dockGlyphs[i],dockColors[i]);touch(slot,this::library);}
       FrameLayout.LayoutParams frame=new FrameLayout.LayoutParams(dp(61),dp(61),Gravity.CENTER);slot.addView(icon,frame);
+      slot.setOnLongClickListener(v->{pickApp(dockIndex);return true;});
       dock.addView(slot,new LinearLayout.LayoutParams(0,dp(67),1));
     }
     add(shell,dock,-1,86);
@@ -305,11 +343,13 @@ public class MainActivity extends Activity {
     line("Android system settings",()->startActivity(new Intent(Settings.ACTION_SETTINGS)));
     line("Refresh installed apps",()->{refresh();home();});
     line("Reduce motion: "+(reduceMotion?"On":"Off"),()->{reduceMotion=!reduceMotion;getPreferences(0).edit().putBoolean("reduceMotion",reduceMotion).apply();settings();});
-    line("Wallpaper & style",()->startActivity(new Intent(Settings.ACTION_DISPLAY_SETTINGS)));
+    line("Wallpaper: "+wallpaperNames[wallpaperStyle],this::chooseWallpaper);
+    line("Edit Home Screen apps",()->pickApp(0));
+    line("Reset Home Screen layout",this::resetLayout);
     line("App permissions",()->startActivity(new Intent(Settings.ACTION_APPLICATION_SETTINGS)));
     line("Battery settings",()->startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)));
     space(shell,18);
-    TextView note=text("GlassOS 0.3  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
+    TextView note=text("GlassOS 0.4  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
   }
   @Override public void onBackPressed(){if(page.equals("home"))super.onBackPressed();else home();}
 }
