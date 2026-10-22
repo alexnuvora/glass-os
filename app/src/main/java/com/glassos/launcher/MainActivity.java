@@ -92,39 +92,93 @@ public class MainActivity extends Activity {
     for(String term:terms)for(ResolveInfo app:apps)if(app.activityInfo.packageName.toLowerCase(Locale.ROOT).contains(term))return app;
     return null;
   }
+  private TextView iconFallback(String symbol,int background){
+    TextView v=text(symbol,29,Color.WHITE);v.setBackground(shape(background,17));return v;
+  }
+  private View referenceIcon(String label,String glyph,int color,String... packages){
+    LinearLayout tile=column();tile.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
+    ResolveInfo installed=match(packages);
+    FrameLayout icon=new FrameLayout(this);icon.setBackground(translucent(16));icon.setClipToOutline(true);
+    if(installed!=null){ImageView image=new ImageView(this);image.setImageDrawable(installed.loadIcon(pm));image.setScaleType(ImageView.ScaleType.FIT_XY);icon.addView(image,new FrameLayout.LayoutParams(-1,-1));}
+    else {TextView fallback=iconFallback(glyph,color);icon.addView(fallback,new FrameLayout.LayoutParams(-1,-1));}
+    LinearLayout.LayoutParams ip=new LinearLayout.LayoutParams(dp(60),dp(60));tile.addView(icon,ip);
+    TextView name=text(label,12,Color.WHITE);name.setSingleLine();name.setEllipsize(TextUtils.TruncateAt.END);name.setShadowLayer(4,0,1,0xaa1f1b20);
+    LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,dp(22));np.topMargin=dp(5);tile.addView(name,np);
+    tile.setOnClickListener(v->{if(installed!=null)launch(installed);else library();});
+    return tile;
+  }
   private void home(){
     canvas("home");
-    LinearLayout top=horizontal();TextView clock=text(new java.text.SimpleDateFormat("HH:mm",Locale.UK).format(new Date()),17,foreground());clock.setTypeface(null,1);
-    top.addView(clock,new LinearLayout.LayoutParams(0,dp(35),1));
-    TextView controls=text("◉  ☷",22,foreground());add(top,controls,72,35);controls.setOnClickListener(v->controls());
-    add(shell,top,-1,35);space(shell,22);
-    LinearLayout widgets=horizontal();
-    LinearLayout date=column();date.setPadding(dp(17),dp(13),dp(12),dp(12));date.setBackground(translucent(26));
-    TextView day=text(new java.text.SimpleDateFormat("EEEE",Locale.UK).format(new Date()).toUpperCase(Locale.UK),11,0xffe4534f);day.setGravity(Gravity.LEFT);add(date,day,-1,23);
-    TextView number=text(new java.text.SimpleDateFormat("d",Locale.UK).format(new Date()),51,foreground());number.setGravity(Gravity.LEFT);add(date,number,-1,66);
-    TextView month=text(new java.text.SimpleDateFormat("MMMM yyyy",Locale.UK).format(new Date()),13,foreground());month.setGravity(Gravity.LEFT);add(date,month,-1,27);
-    LinearLayout.LayoutParams wl=new LinearLayout.LayoutParams(0,dp(154),1);wl.rightMargin=dp(12);widgets.addView(date,wl);
-    LinearLayout action=column();action.setPadding(dp(14),dp(16),dp(14),dp(12));action.setBackground(translucent(26));
-    TextView label=text("GLASSOS",12,foreground());label.setGravity(Gravity.LEFT);add(action,label,-1,30);
-    TextView middle=text("Good "+(new java.util.Date().getHours()<12?"morning":new java.util.Date().getHours()<18?"afternoon":"evening"),19,foreground());middle.setGravity(Gravity.LEFT);add(action,middle,-1,46);
-    TextView hint=text("Swipe up for apps  ↗",12,foreground());hint.setGravity(Gravity.LEFT);add(action,hint,-1,30);
-    widgets.addView(action,new LinearLayout.LayoutParams(0,dp(154),1));action.setOnClickListener(v->library());
-    add(shell,widgets,-1,154);space(shell,22);
-    ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);
-    LinearLayout area=column();area.setGravity(Gravity.TOP);ArrayList<ResolveInfo> visible=new ArrayList<>();
-    for(ResolveInfo a:apps){if(visible.size()==16)break;if(!a.activityInfo.packageName.contains("com.android.settings"))visible.add(a);}
-    grid(area,visible);scroll.addView(area);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-    TextView search=pill("⌕   Search",this::library);
-    LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(dp(132),dp(35));sp.gravity=Gravity.CENTER;sp.bottomMargin=dp(13);shell.addView(search,sp);
-    LinearLayout dock=horizontal();dock.setPadding(dp(9),dp(12),dp(9),dp(3));dock.setBackground(translucent(32));
-    String[][] preferences={{"dialer","phone"},{"messaging","sms"},{"chrome","browser"},{"camera"}};
-    for(String[] options:preferences){
-      ResolveInfo app=match(options);if(app==null&&!apps.isEmpty())app=apps.get(Math.min(dock.getChildCount(),apps.size()-1));
-      FrameLayout holder=new FrameLayout(this);if(app!=null){ImageView img=new ImageView(this);img.setImageDrawable(app.loadIcon(pm));FrameLayout.LayoutParams ip=new FrameLayout.LayoutParams(dp(57),dp(57),Gravity.CENTER);holder.addView(img,ip);ResolveInfo selected=app;holder.setOnClickListener(v->launch(selected));}
-      dock.addView(holder,new LinearLayout.LayoutParams(0,dp(64),1));
+    shell.setPadding(dp(15),dp(10),dp(15),dp(18));
+    TextView status=text(new java.text.SimpleDateFormat("h:mm",Locale.UK).format(new Date())+"                                              ▮▮  ◕  ▰",15,Color.WHITE);
+    status.setTypeface(null,1);margin(shell,status,36,12);
+    LinearLayout tiles=horizontal();tiles.setGravity(Gravity.TOP);
+    LinearLayout weather=column();weather.setPadding(dp(16),dp(15),dp(10),dp(12));
+    weather.setBackground(shape(0xff3479b4,29));
+    TextView city=text("Weather  ↗",14,WHITE);city.setTypeface(null,1);city.setGravity(Gravity.LEFT);add(weather,city,-1,24);
+    TextView temp=text("☀",59,WHITE);temp.setGravity(Gravity.LEFT);add(weather,temp,-1,80);
+    TextView condition=text("Weather",16,WHITE);condition.setGravity(Gravity.LEFT);add(weather,condition,-1,30);
+    TextView hint=text("Tap to open",12,0xffdceeff);hint.setGravity(Gravity.LEFT);add(weather,hint,-1,23);
+    weather.setOnClickListener(v->{ResolveInfo w=match("weather");if(w!=null)launch(w);else library();});
+    LinearLayout.LayoutParams wp=new LinearLayout.LayoutParams(0,dp(155),1);wp.rightMargin=dp(9);tiles.addView(weather,wp);
+    LinearLayout calendar=column();calendar.setPadding(dp(16),dp(15),dp(10),dp(12));calendar.setBackground(shape(WHITE,29));
+    TextView weekday=text(new java.text.SimpleDateFormat("EEEE",Locale.UK).format(new Date()).toUpperCase(Locale.UK),13,0xffee5356);weekday.setGravity(Gravity.LEFT);weekday.setTypeface(null,1);add(calendar,weekday,-1,27);
+    TextView date=text(new java.text.SimpleDateFormat("d",Locale.UK).format(new Date()),51,0xff181818);date.setGravity(Gravity.LEFT);add(calendar,date,-1,61);
+    TextView events=text("Calendar",16,0xff9c9c9f);events.setGravity(Gravity.LEFT);add(calendar,events,-1,45);
+    calendar.setOnClickListener(v->{ResolveInfo app=match("calendar");if(app!=null)launch(app);else library();});
+    tiles.addView(calendar,new LinearLayout.LayoutParams(0,dp(155),1));
+    add(shell,tiles,-1,155);
+    LinearLayout widgetNames=horizontal();
+    TextView left=text("Weather",12,WHITE);TextView right=text("Calendar",12,WHITE);
+    widgetNames.addView(left,new LinearLayout.LayoutParams(0,dp(30),1));widgetNames.addView(right,new LinearLayout.LayoutParams(0,dp(30),1));add(shell,widgetNames,-1,32);
+    space(shell,10);
+    String[][] names={
+      {"FaceTime","Calendar","Photos","Camera"},
+      {"Mail","Notes","Clock","Maps"},
+      {"TV","News","App Store","Games"},
+      {"Health","Wallet","Siri","Settings"}
+    };
+    String[][] emojis={
+      {"▣","14","✿","◉"},{"✉","▤","◷","➤"},{"tv","N","A","🚀"},{"♥","▰","✦","⚙"}
+    };
+    int[][] colors={
+      {0xff1dd65b,0xffffffff,0xffffffff,0xff707e90},
+      {0xff168be9,0xfff6c72b,0xffe8edf3,0xff2abd87},
+      {0xff171717,0xfff7f7f7,0xff0a8af0,0xffff4b4f},
+      {0xfff9f9f9,0xff222c38,0xffd9dfe5,0xff858993}
+    };
+    String[][][] packages={
+      {{"video","meet"},{"calendar"},{"gallery","photos"},{"camera"}},
+      {{"gmail","email"},{"notes","keep"},{"clock"},{"maps"}},
+      {{"youtube.tv","tv"},{"news"},{"vending","playstore"},{"games"}},
+      {{"health"},{"wallet"},{"assistant","googlequicksearch"},{"settings"}}
+    };
+    LinearLayout iconRows=column();
+    for(int row=0;row<4;row++){
+      LinearLayout strip=horizontal();strip.setGravity(Gravity.TOP);
+      for(int col=0;col<4;col++){
+        final int rr=row,cc=col;
+        View item=referenceIcon(names[rr][cc],emojis[rr][cc],colors[rr][cc],packages[rr][cc]);
+        strip.addView(item,new LinearLayout.LayoutParams(0,dp(91),1));
+      }
+      add(iconRows,strip,-1,94);
     }
-    add(shell,dock,-1,81);
-    shell.setOnTouchListener((v,e)->{if(e.getAction()==0){downY=e.getY();downX=e.getX();return true;}if(e.getAction()==1){float dy=e.getY()-downY;if(dy < -dp(45))library();else if(dy>dp(55))controls();return true;}return true;});
+    shell.addView(iconRows,new LinearLayout.LayoutParams(-1,0,1));
+    TextView search=text("⌕  Search",14,0xfff5f5f8);search.setBackground(translucent(30));
+    LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(dp(100),dp(35));sp.gravity=Gravity.CENTER;sp.bottomMargin=dp(19);shell.addView(search,sp);search.setOnClickListener(v->library());
+    LinearLayout dock=horizontal();dock.setGravity(Gravity.CENTER);dock.setPadding(dp(9),dp(11),dp(9),dp(8));dock.setBackground(translucent(35));
+    String[] dockNames={"Phone","Browser","Messages","Music"};
+    String[] dockGlyphs={"☎","◉","●","♫"};int[] dockColors={0xff20d958,0xff238fe8,0xff25d95a,0xffe93453};
+    String[][] dockPackages={{"dialer","phone"},{"chrome","browser"},{"messaging","sms"},{"spotify","music"}};
+    for(int i=0;i<4;i++){
+      ResolveInfo item=match(dockPackages[i]);FrameLayout slot=new FrameLayout(this);
+      View icon;
+      if(item!=null){ImageView img=new ImageView(this);img.setImageDrawable(item.loadIcon(pm));icon=img;slot.setOnClickListener(v->launch(item));}
+      else{icon=iconFallback(dockGlyphs[i],dockColors[i]);slot.setOnClickListener(v->library());}
+      FrameLayout.LayoutParams frame=new FrameLayout.LayoutParams(dp(61),dp(61),Gravity.CENTER);slot.addView(icon,frame);
+      dock.addView(slot,new LinearLayout.LayoutParams(0,dp(67),1));
+    }
+    add(shell,dock,-1,86);
   }
   private void library(){
     canvas("library");title("App Library");EditText input=new EditText(this);input.setSingleLine();input.setHint("⌕  Search");input.setTextSize(17);input.setPadding(dp(20),0,dp(15),0);input.setBackground(translucent(19));margin(shell,input,52,20);
