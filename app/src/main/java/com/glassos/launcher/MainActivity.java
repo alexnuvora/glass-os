@@ -27,8 +27,56 @@ public class MainActivity extends Activity {
   private GradientDrawable shape(int color,float radius){
     GradientDrawable x=new GradientDrawable();x.setColor(color);x.setCornerRadius(dp(radius));return x;
   }
-  private GradientDrawable translucent(float radius){
-    GradientDrawable x=shape(glass(),radius);x.setStroke(dp(1),dark?0x55ffffff:0x99ffffff);return x;
+  // Android Canvas approximation of Apple's dynamic glass material.
+  // Optical highlights and touch response are real; backdrop refraction is not available here.
+  private Drawable translucent(float radius){return new GlassSurface(radius);}
+  private class GlassSurface extends Drawable {
+    private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final float radius;
+    private final Path outline=new Path();
+    GlassSurface(float r){radius=r;}
+    @Override public void draw(Canvas canvas){
+      Rect bounds=getBounds();float w=bounds.width(),h=bounds.height();if(w<=0||h<=0)return;
+      float r=Math.min(dp(radius),Math.min(w,h)/2f);
+      RectF box=new RectF(bounds.left+dp(1),bounds.top+dp(1),bounds.right-dp(1),bounds.bottom-dp(1));
+      // Layered tinted translucency with brighter rim at the top edge.
+      paint.setStyle(Paint.Style.FILL);
+      paint.setShader(new LinearGradient(0,bounds.top,0,bounds.bottom,
+        dark?new int[]{0x99b9c4e1,0x557e8aab,0x66818cae}:
+             new int[]{0xb7ffffff,0x6ad6e4fa,0x8be8efff},
+        new float[]{0f,.44f,1f},Shader.TileMode.CLAMP));
+      canvas.drawRoundRect(box,r,r,paint);paint.setShader(null);
+      paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(1.3f));
+      paint.setShader(new LinearGradient(0,bounds.top,0,bounds.bottom,
+        new int[]{0xf5ffffff,0x77ffffff,0x44ffffff},null,Shader.TileMode.CLAMP));
+      canvas.drawRoundRect(box,r,r,paint);paint.setShader(null);
+      // Inner specular arc, clipped to the top portion.
+      canvas.save();canvas.clipRect(bounds.left,bounds.top,bounds.right,bounds.top+h*.46f);
+      paint.setStrokeWidth(dp(.65f));paint.setColor(0x99ffffff);
+      RectF inner=new RectF(box.left+dp(2),box.top+dp(2),box.right-dp(2),box.bottom-dp(2));
+      canvas.drawRoundRect(inner,Math.max(0,r-dp(2)),Math.max(0,r-dp(2)),paint);
+      canvas.restore();paint.setStyle(Paint.Style.FILL);
+    }
+    @Override public void setAlpha(int alpha){}
+    @Override public void setColorFilter(android.graphics.ColorFilter filter){}
+    @Override public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
+  }
+  private void touch(View v,Runnable action){
+    v.setClickable(true);
+    v.setOnTouchListener((target,event)->{
+      if(event.getAction()==MotionEvent.ACTION_DOWN){
+        target.animate().scaleX(.96f).scaleY(.96f).setDuration(110).start();return true;
+      }
+      if(event.getAction()==MotionEvent.ACTION_UP){
+        target.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(new android.view.animation.OvershootInterpolator(.6f)).start();
+        if(event.getX()>=0&&event.getX()<=target.getWidth()&&event.getY()>=0&&event.getY()<=target.getHeight()) action.run();
+        return true;
+      }
+      if(event.getAction()==MotionEvent.ACTION_CANCEL){
+        target.animate().scaleX(1f).scaleY(1f).setDuration(150).start();return true;
+      }
+      return true;
+    });
   }
   private LinearLayout column(){LinearLayout v=new LinearLayout(this);v.setOrientation(1);return v;}
   private LinearLayout horizontal(){LinearLayout v=new LinearLayout(this);v.setOrientation(0);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
@@ -38,7 +86,7 @@ public class MainActivity extends Activity {
   private void margin(LinearLayout host,View child,int h,int bottom){
     LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(h));p.bottomMargin=dp(bottom);host.addView(child,p);
   }
-  private TextView pill(String label,Runnable action){TextView t=text(label,15,foreground());t.setBackground(translucent(30));t.setOnClickListener(v->action.run());return t;}
+  private TextView pill(String label,Runnable action){TextView t=text(label,15,foreground());t.setBackground(translucent(30));touch(t,action);return t;}
   @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
   private void refresh(){
     apps.clear();Intent i=new Intent(Intent.ACTION_MAIN);i.addCategory(Intent.CATEGORY_LAUNCHER);
@@ -165,7 +213,7 @@ public class MainActivity extends Activity {
     }
     shell.addView(iconRows,new LinearLayout.LayoutParams(-1,0,1));
     TextView search=text("⌕  Search",14,0xfff5f5f8);search.setBackground(translucent(30));
-    LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(dp(100),dp(35));sp.gravity=Gravity.CENTER;sp.bottomMargin=dp(19);shell.addView(search,sp);search.setOnClickListener(v->library());
+    LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(dp(100),dp(35));sp.gravity=Gravity.CENTER;sp.bottomMargin=dp(19);shell.addView(search,sp);touch(search,this::library);
     LinearLayout dock=horizontal();dock.setGravity(Gravity.CENTER);dock.setPadding(dp(9),dp(11),dp(9),dp(8));dock.setBackground(translucent(35));
     String[] dockNames={"Phone","Browser","Messages","Music"};
     String[] dockGlyphs={"☎","◉","●","♫"};int[] dockColors={0xff20d958,0xff238fe8,0xff25d95a,0xffe93453};
@@ -173,8 +221,8 @@ public class MainActivity extends Activity {
     for(int i=0;i<4;i++){
       ResolveInfo item=match(dockPackages[i]);FrameLayout slot=new FrameLayout(this);
       View icon;
-      if(item!=null){ImageView img=new ImageView(this);img.setImageDrawable(item.loadIcon(pm));icon=img;slot.setOnClickListener(v->launch(item));}
-      else{icon=iconFallback(dockGlyphs[i],dockColors[i]);slot.setOnClickListener(v->library());}
+      if(item!=null){ImageView img=new ImageView(this);img.setImageDrawable(item.loadIcon(pm));icon=img;touch(slot,()->launch(item));}
+      else{icon=iconFallback(dockGlyphs[i],dockColors[i]);touch(slot,this::library);}
       FrameLayout.LayoutParams frame=new FrameLayout.LayoutParams(dp(61),dp(61),Gravity.CENTER);slot.addView(icon,frame);
       dock.addView(slot,new LinearLayout.LayoutParams(0,dp(67),1));
     }
@@ -187,7 +235,7 @@ public class MainActivity extends Activity {
     input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){}public void onTextChanged(CharSequence s,int st,int before,int count){update.run();}public void afterTextChanged(Editable e){}});update.run();
   }
   private TextView button(String label,Runnable run){
-    TextView v=text(label,18,foreground());v.setBackground(translucent(21));v.setOnClickListener(w->run.run());return v;
+    TextView v=text(label,18,foreground());v.setBackground(translucent(21));touch(v,run);return v;
   }
   private void line(String title,Runnable run){TextView b=button(title+"    ›",run);b.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);b.setPadding(dp(20),0,dp(14),0);margin(shell,b,57,12);}
   private void controls(){
