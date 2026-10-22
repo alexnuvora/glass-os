@@ -530,22 +530,43 @@ public class MainActivity extends Activity {
     TextView v=text(label,18,foreground());setGlass(v,21);touch(v,run);return v;
   }
   private void line(String title,Runnable run){TextView b=button(title+"    ›",run);b.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);b.setPadding(dp(20),0,dp(14),0);margin(shell,b,57,12);}
+  private void controlTile(LinearLayout row,String icon,String label,Runnable task){
+    LinearLayout tile=column();tile.setGravity(Gravity.CENTER);setGlass(tile,25);
+    TextView symbol=text(icon,30,foreground());add(tile,symbol,-1,48);
+    TextView caption=text(label,13,foreground());add(tile,caption,-1,29);
+    LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(105),1);lp.setMargins(dp(5),0,dp(5),0);row.addView(tile,lp);touch(tile,task);
+  }
   private void controls(){
     canvas("controls");title("Control Centre");
-    LinearLayout top=horizontal();
-    TextView wifi=button("●\nWi-Fi",()->startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS)));top.addView(wifi,new LinearLayout.LayoutParams(0,dp(125),1));
-    TextView bluetooth=button("ᛒ\nBluetooth",()->startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(0,dp(125),1);bp.leftMargin=dp(12);top.addView(bluetooth,bp);add(shell,top,-1,125);space(shell,12);
-    line("Mobile network",()->startActivity(new Intent(Settings.ACTION_WIRELESS_SETTINGS)));
-    TextView media=button("♪       Not Playing\n\n            ▶",()->startActivity(new Intent(Settings.ACTION_SOUND_SETTINGS)));margin(shell,media,132,12);
-    line("Focus & sound",()->startActivity(new Intent(Settings.ACTION_SOUND_SETTINGS)));
-    TextView brightness=text("☀   Brightness",19,foreground());add(shell,brightness,-1,46);
-    SeekBar slider=new SeekBar(this);slider.setMax(255);slider.setProgress(155);slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-      public void onProgressChanged(SeekBar seek,int progress,boolean fromUser){if(fromUser){WindowManager.LayoutParams a=getWindow().getAttributes();a.screenBrightness=Math.max(.02f,progress/255f);getWindow().setAttributes(a);}}
-      public void onStartTrackingTouch(SeekBar s){}public void onStopTrackingTouch(SeekBar s){}
-    });add(shell,slider,-1,58);
-    line("Notifications",this::notifications);line("Display options",()->startActivity(new Intent(Settings.ACTION_DISPLAY_SETTINGS)));line("GlassOS Settings",this::settings);enter(shell);
+    ScrollView scroll=new ScrollView(this);scroll.setVerticalScrollBarEnabled(false);
+    LinearLayout body=column();scroll.addView(body);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+    LinearLayout connection=horizontal();
+    controlTile(connection,"◉","Wi-Fi",()->startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS)));
+    controlTile(connection,"ᛒ","Bluetooth",()->startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
+    add(body,connection,-1,112);space(body,10);
+    LinearLayout second=horizontal();
+    controlTile(second,"◈","Mobile",()->startActivity(new Intent(Settings.ACTION_WIRELESS_SETTINGS)));
+    controlTile(second,"☾","Focus",()->startActivity(new Intent(Settings.ACTION_SOUND_SETTINGS)));
+    add(body,second,-1,112);space(body,14);
+    TextView media=text("♫      Not Playing       ▷",21,foreground());setGlass(media,25);
+    margin(body,media,108,14);touch(media,()->startActivity(new Intent(Settings.ACTION_SOUND_SETTINGS)));
+    TextView heading=text("DISPLAY & BRIGHTNESS",12,foreground());heading.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);add(body,heading,-1,35);
+    LinearLayout sliderPanel=column();sliderPanel.setPadding(dp(12),dp(10),dp(12),dp(8));setGlass(sliderPanel,23);
+    TextView brightness=text("☀  Brightness",17,foreground());brightness.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);add(sliderPanel,brightness,-1,36);
+    SeekBar seek=new SeekBar(this);seek.setMax(100);seek.setProgress(65);
+    seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+      public void onProgressChanged(SeekBar bar,int value,boolean user){if(user){WindowManager.LayoutParams p=getWindow().getAttributes();p.screenBrightness=Math.max(.02f,value/100f);getWindow().setAttributes(p);}}
+      public void onStartTrackingTouch(SeekBar bar){}
+      public void onStopTrackingTouch(SeekBar bar){}
+    });add(sliderPanel,seek,-1,46);margin(body,sliderPanel,105,12);
+    LinearLayout bottom=horizontal();
+    controlTile(bottom,"♧","Notifications",this::notifications);
+    controlTile(bottom,"⚙","Settings",this::settings);
+    add(body,bottom,-1,112);space(body,12);
+    TextView caption=text("Some controls open Android system settings.",12,foreground());add(body,caption,-1,44);
+    enter(scroll);
   }
-  private void notifications(){
+    private void notifications(){
     canvas("notifications");title("Notifications");
     if(GlassNotificationListener.current==null){line("Enable notification access",()->startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));return;}
     ScrollView scroll=new ScrollView(this);LinearLayout items=column();scroll.addView(items);shell.addView(scroll);
@@ -558,33 +579,62 @@ public class MainActivity extends Activity {
       card.setPadding(dp(16),dp(14),dp(16),dp(14));margin(items,card,100,10);card.setContentDescription("Notification: "+(t==null?n.getPackageName():t.toString()));
     }
   }
-  private void settings(){
-    canvas("settings");title("GlassOS Settings");
-    TextView section=text("APPEARANCE",12,foreground());section.setGravity(Gravity.LEFT);margin(shell,section,38,8);
-    line("Appearance: "+(dark?"Dark":"Light"),()->{dark=!dark;getPreferences(0).edit().putBoolean("dark",dark).apply();settings();});
-    line("App icons: "+(large?"Large":"Standard"),()->{large=!large;getPreferences(0).edit().putBoolean("large",large).apply();settings();});
-    TextView section2=text("ANDROID INTEGRATION",12,foreground());section2.setGravity(Gravity.LEFT);margin(shell,section2,48,5);
-    line("Select default Home app",()->startActivity(new Intent(Settings.ACTION_HOME_SETTINGS)));
-    line("Notification access",()->startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
-    line("Android system settings",()->startActivity(new Intent(Settings.ACTION_SETTINGS)));
-    line("Refresh installed apps",()->{refresh();home();});
-    line("Reduce motion: "+(reduceMotion?"On":"Off"),()->{reduceMotion=!reduceMotion;getPreferences(0).edit().putBoolean("reduceMotion",reduceMotion).apply();settings();});
-    line("Wallpaper: "+wallpaperNames[wallpaperStyle],this::chooseWallpaper);
-    line("Customise Home Screen",this::editHome);
-    line("Status clock seconds: "+(showSeconds?"On":"Off"),()->{showSeconds=!showSeconds;getPreferences(0).edit().putBoolean("showSeconds",showSeconds).apply();settings();});
-    line("Icon appearance: "+tintLabels[iconTint],this::iconAppearance);
-    line("Top widget: "+(widgetMode==1?"Clock":"Battery"),this::chooseWidget);
-    line("Hide notification previews: "+(hidePrivateNotifications?"On":"Off"),()->{hidePrivateNotifications=!hidePrivateNotifications;getPreferences(0).edit().putBoolean("hidePrivateNotifications",hidePrivateNotifications).apply();settings();});
-    line("Glass contrast: "+(highContrastGlass?"High":"Standard"),()->{
-      highContrastGlass=!highContrastGlass;getPreferences(0).edit().putBoolean("highContrastGlass",highContrastGlass).apply();settings();
-    });
-    line("Glass opacity: "+Math.round(glassStrength*100)+"%",this::chooseGlassStrength);
-    
-    line("Reset Home Screen layout",this::resetLayout);
-    line("App permissions",()->startActivity(new Intent(Settings.ACTION_APPLICATION_SETTINGS)));
-    line("Battery settings",()->startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)));
-    space(shell,18);
-    TextView note=text("GlassOS 0.8  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
+  private void settingsRow(LinearLayout group,String title,String detail,Runnable run){
+    LinearLayout item=horizontal();item.setPadding(dp(16),dp(6),dp(12),dp(6));
+    LinearLayout labels=column();
+    TextView name=text(title,16,foreground());name.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);add(labels,name,-1,29);
+    TextView sub=text(detail,12,foreground());sub.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);add(labels,sub,-1,24);
+    item.addView(labels,new LinearLayout.LayoutParams(0,dp(59),1));
+    TextView arrow=text("›",25,foreground());add(item,arrow,24,56);
+    group.addView(item,new LinearLayout.LayoutParams(-1,dp(68)));touch(item,run);
+    View separator=new View(this);separator.setBackgroundColor(dark?0x33ffffff:0x33a0a0aa);
+    LinearLayout.LayoutParams sep=new LinearLayout.LayoutParams(-1,dp(1));sep.leftMargin=dp(16);group.addView(separator,sep);
   }
-  @Override public void onBackPressed(){if(page.equals("home"))super.onBackPressed();else home();}
+  private void settingsGroup(LinearLayout body,String heading,String[] titles,String[] descriptions,Runnable[] tasks){
+    TextView label=text(heading,12,foreground());label.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);
+    LinearLayout.LayoutParams labelParams=new LinearLayout.LayoutParams(-1,dp(42));labelParams.topMargin=dp(12);body.addView(label,labelParams);
+    LinearLayout group=column();setGlass(group,23);
+    for(int i=0;i<titles.length;i++)settingsRow(group,titles[i],descriptions[i],tasks[i]);
+    body.addView(group,new LinearLayout.LayoutParams(-1,-2));
+  }
+  private void settings(){
+    canvas("settings");title("Settings");
+    ScrollView scroll=new ScrollView(this);scroll.setVerticalScrollBarEnabled(false);
+    LinearLayout content=column();scroll.addView(content);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+    settingsGroup(content,"PERSONALISATION",
+      new String[]{"Home Screen","Wallpaper","App Icons","Top Widget"},
+      new String[]{"Apps, folders and layout",wallpaperNames[wallpaperStyle],tintLabels[iconTint],widgetMode==1?"Clock":"Battery"},
+      new Runnable[]{this::editHome,this::chooseWallpaper,this::iconAppearance,this::chooseWidget});
+    settingsGroup(content,"APPEARANCE & MOTION",
+      new String[]{"Appearance","Glass Contrast","Glass Opacity","Reduce Motion","Clock Seconds"},
+      new String[]{dark?"Dark":"Light",highContrastGlass?"High":"Standard",Math.round(glassStrength*100)+"%",reduceMotion?"On":"Off",showSeconds?"On":"Off"},
+      new Runnable[]{
+        ()->{dark=!dark;getPreferences(0).edit().putBoolean("dark",dark).apply();settings();},
+        ()->{highContrastGlass=!highContrastGlass;getPreferences(0).edit().putBoolean("highContrastGlass",highContrastGlass).apply();settings();},
+        this::chooseGlassStrength,
+        ()->{reduceMotion=!reduceMotion;getPreferences(0).edit().putBoolean("reduceMotion",reduceMotion).apply();settings();},
+        ()->{showSeconds=!showSeconds;getPreferences(0).edit().putBoolean("showSeconds",showSeconds).apply();settings();}
+      });
+    settingsGroup(content,"PRIVACY & NOTIFICATIONS",
+      new String[]{"Notification Centre","Notification Previews","Notification Permissions"},
+      new String[]{"Review notifications",hidePrivateNotifications?"Hidden":"Visible","Allow notification access"},
+      new Runnable[]{this::notifications,
+        ()->{hidePrivateNotifications=!hidePrivateNotifications;getPreferences(0).edit().putBoolean("hidePrivateNotifications",hidePrivateNotifications).apply();settings();},
+        ()->startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))});
+    settingsGroup(content,"ANDROID & DEVICE",
+      new String[]{"Default Home App","Installed Apps","Display","Battery","Refresh Apps","Reset Home Layout"},
+      new String[]{"Select GlassOS as launcher","Android app management","System display settings","Battery optimisation","Reload installed applications","Restore original positions"},
+      new Runnable[]{
+        ()->startActivity(new Intent(Settings.ACTION_HOME_SETTINGS)),
+        ()->startActivity(new Intent(Settings.ACTION_APPLICATION_SETTINGS)),
+        ()->startActivity(new Intent(Settings.ACTION_DISPLAY_SETTINGS)),
+        ()->startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)),
+        ()->{refresh();home();},this::resetLayout
+      });
+    space(content,22);
+    TextView footer=text("GlassOS 0.9 • Android-native iOS-inspired launcher\nProtected system screens remain controlled by Samsung and Android.",12,foreground());
+    add(content,footer,-1,90);
+    enter(scroll);
+  }
+    @Override public void onBackPressed(){if(page.equals("home"))super.onBackPressed();else home();}
 }
