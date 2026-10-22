@@ -28,6 +28,8 @@ public class MainActivity extends Activity {
   private Bitmap blurredBackdrop;
   private int iconTint=0;
   private int widgetMode=0;
+  private int homePage=0;
+  private boolean islandEnabled=true;
   private boolean hidePrivateNotifications=false;
   private final String[] tintLabels={"Original","Monochrome","Soft tint"};
   private float downX, downY;
@@ -138,7 +140,7 @@ public class MainActivity extends Activity {
     LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(h));p.bottomMargin=dp(bottom);host.addView(child,p);
   }
   private TextView pill(String label,Runnable action){TextView t=text(label,15,foreground());setGlass(t,30);touch(t,action);return t;}
-  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);iconTint=getPreferences(0).getInt("iconTint",0);widgetMode=getPreferences(0).getInt("widgetMode",0);hidePrivateNotifications=getPreferences(0).getBoolean("hidePrivateNotifications",false);showSeconds=getPreferences(0).getBoolean("showSeconds",false);highContrastGlass=getPreferences(0).getBoolean("highContrastGlass",false);glassStrength=getPreferences(0).getFloat("glassStrength",.70f);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
+  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);iconTint=getPreferences(0).getInt("iconTint",0);widgetMode=getPreferences(0).getInt("widgetMode",0);islandEnabled=getPreferences(0).getBoolean("islandEnabled",true);hidePrivateNotifications=getPreferences(0).getBoolean("hidePrivateNotifications",false);showSeconds=getPreferences(0).getBoolean("showSeconds",false);highContrastGlass=getPreferences(0).getBoolean("highContrastGlass",false);glassStrength=getPreferences(0).getFloat("glassStrength",.70f);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
   private void refresh(){
     apps.clear();Intent i=new Intent(Intent.ACTION_MAIN);i.addCategory(Intent.CATEGORY_LAUNCHER);
     apps.addAll(pm.queryIntentActivities(i,0));apps.removeIf(a->getPackageName().equals(a.activityInfo.packageName));
@@ -225,8 +227,8 @@ public class MainActivity extends Activity {
     menu.getMenu().add("Home screen settings");
     menu.getMenu().add("Change app in this position");
     menu.getMenu().add("Rename icon");
-    if(index<16)menu.getMenu().add("Create or edit folder");
-    if(index<16)menu.getMenu().add("Move icon");
+    if(index<40 && index%20<16)menu.getMenu().add("Create or edit folder");
+    if(index<40 && index%20<16)menu.getMenu().add("Move icon");
     menu.setOnMenuItemClickListener(item->{
       String choice=item.getTitle().toString();
       if(choice.startsWith("Open")){if(installed!=null)launch(installed);else library();}
@@ -281,7 +283,7 @@ public class MainActivity extends Activity {
   private void choosePosition(boolean folder){
     String[] slots=new String[16];for(int i=0;i<16;i++)slots[i]="Icon "+(i+1);
     new AlertDialog.Builder(this).setTitle("Choose position").setItems(slots,(dialog,which)->{
-      if(folder)editFolder(which);else pickApp(which);
+      if(folder)editFolder(homePage*20+which);else pickApp(homePage*20+which);
     }).setNegativeButton("Cancel",null).show();
   }
   private void chooseGlassStrength(){
@@ -316,7 +318,7 @@ public class MainActivity extends Activity {
       .setNegativeButton("Cancel",null)
       .setPositiveButton("Reset",(dialog,which)->{
         android.content.SharedPreferences.Editor edit=getPreferences(0).edit();
-        for(int i=0;i<20;i++){edit.remove("slot_"+i);edit.remove("folder_"+i);edit.remove("label_"+i);}
+        for(int i=0;i<40;i++){edit.remove("slot_"+i);edit.remove("folder_"+i);edit.remove("label_"+i);}
         edit.apply();home();
       }).show();
   }
@@ -398,7 +400,17 @@ public class MainActivity extends Activity {
     canvas("home");
     shell.setPadding(dp(15),dp(10),dp(15),dp(18));
     TextView status=text(new java.text.SimpleDateFormat(showSeconds?"h:mm:ss":"h:mm",Locale.UK).format(new Date())+"        ●●●  ▰",15,Color.WHITE);
-    status.setTypeface(null,1);margin(shell,status,36,12);
+    status.setTypeface(null,1);
+    LinearLayout topBar=horizontal();
+    topBar.addView(status,new LinearLayout.LayoutParams(0,dp(36),1));
+    if(islandEnabled){
+      TextView island=text("●  GlassOS",13,Color.WHITE);
+      island.setBackground(shape(0xee10121d,27));
+      island.setContentDescription("GlassOS status and notifications");
+      touch(island,this::notifications);
+      add(topBar,island,128,35);
+    }
+    margin(shell,topBar,38,12);
     LinearLayout tiles=horizontal();tiles.setGravity(Gravity.TOP);
     LinearLayout weather=column();weather.setPadding(dp(16),dp(15),dp(10),dp(12));
     weather.setBackground(shape(0xff3479b4,29));
@@ -448,12 +460,20 @@ public class MainActivity extends Activity {
       LinearLayout strip=horizontal();strip.setGravity(Gravity.TOP);
       for(int col=0;col<4;col++){
         final int rr=row,cc=col;
-        View item=referenceIcon(names[rr][cc],emojis[rr][cc],colors[rr][cc],rr*4+cc,packages[rr][cc]);
+        int position=homePage*20+rr*4+cc;
+        View item=referenceIcon(names[rr][cc],emojis[rr][cc],colors[rr][cc],position,packages[rr][cc]);
         strip.addView(item,new LinearLayout.LayoutParams(0,dp(91),1));
       }
       add(iconRows,strip,-1,94);
     }
     shell.addView(iconRows,new LinearLayout.LayoutParams(-1,0,1));reveal(iconRows,130);
+    LinearLayout pages=horizontal();pages.setGravity(Gravity.CENTER);
+    for(int i=0;i<2;i++){
+      final int target=i;
+      TextView dot=text(i==homePage?"●":"○",19,Color.WHITE);
+      add(pages,dot,31,32);touch(dot,()->{homePage=target;home();});
+    }
+    add(shell,pages,-1,36);
     TextView search=text("⌕  Search",14,0xfff5f5f8);setGlass(search,30);
     LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(dp(100),dp(35));sp.gravity=Gravity.CENTER;sp.bottomMargin=dp(19);shell.addView(search,sp);touch(search,this::library);
     LinearLayout dock=horizontal();dock.setGravity(Gravity.CENTER);dock.setPadding(dp(9),dp(11),dp(9),dp(8));setGlass(dock,35);
@@ -471,7 +491,10 @@ public class MainActivity extends Activity {
     }
     add(shell,dock,-1,86);reveal(dock,180);
     shell.setFocusableInTouchMode(true);
-    shell.setOnTouchListener((v,e)->{if(e.getAction()==MotionEvent.ACTION_DOWN){downX=e.getX();downY=e.getY();return true;}if(e.getAction()==MotionEvent.ACTION_UP){float dx=e.getX()-downX,dy=e.getY()-downY;if(dy>dp(65))controls();else if(dy< -dp(65)||dx< -dp(95))library();else if(dx>dp(95))notifications();return true;}return true;});
+    shell.setOnTouchListener((v,e)->{if(e.getAction()==MotionEvent.ACTION_DOWN){downX=e.getX();downY=e.getY();return true;}if(e.getAction()==MotionEvent.ACTION_UP){float dx=e.getX()-downX,dy=e.getY()-downY;if(dy>dp(65))controls();
+      else if(dy< -dp(65))library();
+      else if(dx< -dp(80)){if(homePage==0){homePage=1;home();}else library();}
+      else if(dx>dp(80)){if(homePage==1){homePage=0;home();}else notifications();}return true;}return true;});
   }
   private void library(){
     refresh();canvas("library");title("App Library");
@@ -602,9 +625,9 @@ public class MainActivity extends Activity {
     ScrollView scroll=new ScrollView(this);scroll.setVerticalScrollBarEnabled(false);
     LinearLayout content=column();scroll.addView(content);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
     settingsGroup(content,"PERSONALISATION",
-      new String[]{"Home Screen","Wallpaper","App Icons","Top Widget"},
-      new String[]{"Apps, folders and layout",wallpaperNames[wallpaperStyle],tintLabels[iconTint],widgetMode==1?"Clock":"Battery"},
-      new Runnable[]{this::editHome,this::chooseWallpaper,this::iconAppearance,this::chooseWidget});
+      new String[]{"Home Screen","Wallpaper","App Icons","Top Widget","Status Island"},
+      new String[]{"Apps, folders and layout",wallpaperNames[wallpaperStyle],tintLabels[iconTint],widgetMode==1?"Clock":"Battery",islandEnabled?"Enabled":"Disabled"},
+      new Runnable[]{this::editHome,this::chooseWallpaper,this::iconAppearance,this::chooseWidget,()->{islandEnabled=!islandEnabled;getPreferences(0).edit().putBoolean("islandEnabled",islandEnabled).apply();settings();}});
     settingsGroup(content,"APPEARANCE & MOTION",
       new String[]{"Appearance","Glass Contrast","Glass Opacity","Reduce Motion","Clock Seconds"},
       new String[]{dark?"Dark":"Light",highContrastGlass?"High":"Standard",Math.round(glassStrength*100)+"%",reduceMotion?"On":"Off",showSeconds?"On":"Off"},
@@ -632,7 +655,7 @@ public class MainActivity extends Activity {
         ()->{refresh();home();},this::resetLayout
       });
     space(content,22);
-    TextView footer=text("GlassOS 0.9 • Android-native iOS-inspired launcher\nProtected system screens remain controlled by Samsung and Android.",12,foreground());
+    TextView footer=text("GlassOS 1.0 • Android-native iOS-inspired launcher\nProtected system screens remain controlled by Samsung and Android.",12,foreground());
     add(content,footer,-1,90);
     enter(scroll);
   }
