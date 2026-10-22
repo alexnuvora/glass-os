@@ -27,6 +27,8 @@ public class MainActivity extends Activity {
   private final String[] wallpaperNames={"Sky","Midnight","Sunset","Ocean"};
   private Bitmap blurredBackdrop;
   private int iconTint=0;
+  private int widgetMode=0;
+  private boolean hidePrivateNotifications=false;
   private final String[] tintLabels={"Original","Monochrome","Soft tint"};
   private float downX, downY;
   private final int WHITE=Color.WHITE;
@@ -136,7 +138,7 @@ public class MainActivity extends Activity {
     LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(h));p.bottomMargin=dp(bottom);host.addView(child,p);
   }
   private TextView pill(String label,Runnable action){TextView t=text(label,15,foreground());setGlass(t,30);touch(t,action);return t;}
-  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);iconTint=getPreferences(0).getInt("iconTint",0);showSeconds=getPreferences(0).getBoolean("showSeconds",false);highContrastGlass=getPreferences(0).getBoolean("highContrastGlass",false);glassStrength=getPreferences(0).getFloat("glassStrength",.70f);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
+  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);iconTint=getPreferences(0).getInt("iconTint",0);widgetMode=getPreferences(0).getInt("widgetMode",0);hidePrivateNotifications=getPreferences(0).getBoolean("hidePrivateNotifications",false);showSeconds=getPreferences(0).getBoolean("showSeconds",false);highContrastGlass=getPreferences(0).getBoolean("highContrastGlass",false);glassStrength=getPreferences(0).getFloat("glassStrength",.70f);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
   private void refresh(){
     apps.clear();Intent i=new Intent(Intent.ACTION_MAIN);i.addCategory(Intent.CATEGORY_LAUNCHER);
     apps.addAll(pm.queryIntentActivities(i,0));apps.removeIf(a->getPackageName().equals(a.activityInfo.packageName));
@@ -200,6 +202,7 @@ public class MainActivity extends Activity {
     LinearLayout tile=column();tile.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
     ResolveInfo installed=savedApp(index,packages);
     String folder=getPreferences(0).getString("folder_"+index,"");
+    String customLabel=getPreferences(0).getString("label_"+index,"");
     if(!folder.isEmpty())label="Folder";
     FrameLayout icon=new FrameLayout(this);setGlass(icon,16);icon.setClipToOutline(true);
     if(folder.length()>0){TextView fIcon=iconFallback("▦",0x996c87c1);icon.addView(fIcon,new FrameLayout.LayoutParams(-1,-1));}
@@ -207,7 +210,7 @@ public class MainActivity extends Activity {
       applyIconTint(image);icon.addView(image,new FrameLayout.LayoutParams(-1,-1));}
     else {TextView fallback=iconFallback(glyph,color);icon.addView(fallback,new FrameLayout.LayoutParams(-1,-1));}
     LinearLayout.LayoutParams ip=new LinearLayout.LayoutParams(dp(60),dp(60));tile.addView(icon,ip);
-    TextView name=text(folder.isEmpty() && installed!=null?installed.loadLabel(pm).toString():label,12,Color.WHITE);name.setSingleLine();name.setEllipsize(TextUtils.TruncateAt.END);name.setShadowLayer(4,0,1,0xaa1f1b20);
+    TextView name=text(!customLabel.isEmpty()?customLabel:(folder.isEmpty() && installed!=null?installed.loadLabel(pm).toString():label),12,Color.WHITE);name.setSingleLine();name.setEllipsize(TextUtils.TruncateAt.END);name.setShadowLayer(4,0,1,0xaa1f1b20);
     LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,dp(22));np.topMargin=dp(5);tile.addView(name,np);
     tile.setOnClickListener(v->{if(!folder.isEmpty())openFolder(index);else if(installed!=null)launch(installed);else library();});
     tile.setContentDescription("Open "+label);
@@ -221,6 +224,7 @@ public class MainActivity extends Activity {
     menu.getMenu().add("All apps");
     menu.getMenu().add("Home screen settings");
     menu.getMenu().add("Change app in this position");
+    menu.getMenu().add("Rename icon");
     if(index<16)menu.getMenu().add("Create or edit folder");
     if(index<16)menu.getMenu().add("Move icon");
     menu.setOnMenuItemClickListener(item->{
@@ -229,7 +233,7 @@ public class MainActivity extends Activity {
       else if(choice.equals("App info") && installed!=null){
         Intent intent=new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
         intent.setData(android.net.Uri.parse("package:"+installed.activityInfo.packageName));startActivity(intent);
-      }else if(choice.equals("Home screen settings"))settings();else if(choice.equals("Change app in this position"))pickApp(index);else if(choice.equals("Create or edit folder"))editFolder(index);else if(choice.equals("Move icon"))moveIcon(index);else library();
+      }else if(choice.equals("Home screen settings"))settings();else if(choice.equals("Change app in this position"))pickApp(index);else if(choice.equals("Rename icon"))renameIcon(index,label);else if(choice.equals("Create or edit folder"))editFolder(index);else if(choice.equals("Move icon"))moveIcon(index);else library();
       return true;
     });
     anchor.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
@@ -291,13 +295,28 @@ public class MainActivity extends Activity {
         getPreferences(0).edit().putFloat("glassStrength",glassStrength).apply();settings();
       }).show();
   }
+  private void renameIcon(int position,String oldName){
+    EditText input=new EditText(this);input.setSingleLine(true);
+    input.setText(getPreferences(0).getString("label_"+position,oldName));input.selectAll();
+    LinearLayout holder=column();holder.setPadding(dp(24),dp(8),dp(24),0);add(holder,input,-1,55);
+    new AlertDialog.Builder(this).setTitle("Rename Home Screen icon")
+      .setView(holder).setNegativeButton("Cancel",null)
+      .setNeutralButton("Use app name",(dialog,which)->{getPreferences(0).edit().remove("label_"+position).apply();home();})
+      .setPositiveButton("Save",(dialog,which)->{getPreferences(0).edit().putString("label_"+position,input.getText().toString().trim()).apply();home();}).show();
+  }
+  private void chooseWidget(){
+    new AlertDialog.Builder(this).setTitle("Top left widget")
+      .setSingleChoiceItems(new String[]{"Battery percentage","Digital clock"},widgetMode,(dialog,which)->{
+        widgetMode=which;getPreferences(0).edit().putInt("widgetMode",which).apply();dialog.dismiss();home();
+      }).setNegativeButton("Cancel",null).show();
+  }
   private void resetLayout(){
     new AlertDialog.Builder(this).setTitle("Reset Home Screen?")
       .setMessage("Restore the default app positions and dock?")
       .setNegativeButton("Cancel",null)
       .setPositiveButton("Reset",(dialog,which)->{
         android.content.SharedPreferences.Editor edit=getPreferences(0).edit();
-        for(int i=0;i<20;i++){edit.remove("slot_"+i);edit.remove("folder_"+i);}
+        for(int i=0;i<20;i++){edit.remove("slot_"+i);edit.remove("folder_"+i);edit.remove("label_"+i);}
         edit.apply();home();
       }).show();
   }
@@ -383,13 +402,14 @@ public class MainActivity extends Activity {
     LinearLayout tiles=horizontal();tiles.setGravity(Gravity.TOP);
     LinearLayout weather=column();weather.setPadding(dp(16),dp(15),dp(10),dp(12));
     weather.setBackground(shape(0xff3479b4,29));
-    TextView city=text("BATTERY  ↗",14,WHITE);city.setTypeface(null,1);city.setGravity(Gravity.LEFT);add(weather,city,-1,24);
+    TextView city=text(widgetMode==1?"CLOCK  ↗":"BATTERY  ↗",14,WHITE);city.setTypeface(null,1);city.setGravity(Gravity.LEFT);add(weather,city,-1,24);
     android.os.BatteryManager battery=(android.os.BatteryManager)getSystemService(BATTERY_SERVICE);
     int charge=battery==null?-1:battery.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY);
-    TextView temp=text(charge>=0?charge+"%":"☀",47,WHITE);temp.setGravity(Gravity.LEFT);add(weather,temp,-1,80);
-    TextView condition=text("Battery",16,WHITE);condition.setGravity(Gravity.LEFT);add(weather,condition,-1,30);
-    TextView hint=text("Device status",12,0xffdceeff);hint.setGravity(Gravity.LEFT);add(weather,hint,-1,23);
-    weather.setOnClickListener(v->startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)));
+    TextView temp=text(widgetMode==1?new java.text.SimpleDateFormat("HH:mm",Locale.UK).format(new Date()):(charge>=0?charge+"%":"–"),47,WHITE);temp.setGravity(Gravity.LEFT);add(weather,temp,-1,80);
+    TextView condition=text(widgetMode==1?"Local time":"Battery",16,WHITE);condition.setGravity(Gravity.LEFT);add(weather,condition,-1,30);
+    TextView hint=text(widgetMode==1?"United Kingdom":"Device status",12,0xffdceeff);hint.setGravity(Gravity.LEFT);add(weather,hint,-1,23);
+    weather.setOnClickListener(v->chooseWidget());
+    weather.setOnLongClickListener(v->{chooseWidget();return true;});
     LinearLayout.LayoutParams wp=new LinearLayout.LayoutParams(0,dp(155),1);wp.rightMargin=dp(9);tiles.addView(weather,wp);
     LinearLayout calendar=column();calendar.setPadding(dp(16),dp(15),dp(10),dp(12));calendar.setBackground(shape(WHITE,29));
     TextView weekday=text(new java.text.SimpleDateFormat("EEEE",Locale.UK).format(new Date()).toUpperCase(Locale.UK),13,0xffee5356);weekday.setGravity(Gravity.LEFT);weekday.setTypeface(null,1);add(calendar,weekday,-1,27);
@@ -399,7 +419,7 @@ public class MainActivity extends Activity {
     tiles.addView(calendar,new LinearLayout.LayoutParams(0,dp(155),1));
     add(shell,tiles,-1,155);reveal(tiles,70);
     LinearLayout widgetNames=horizontal();
-    TextView left=text("Battery",12,WHITE);TextView right=text("Calendar",12,WHITE);
+    TextView left=text(widgetMode==1?"Clock":"Battery",12,WHITE);TextView right=text("Calendar",12,WHITE);
     widgetNames.addView(left,new LinearLayout.LayoutParams(0,dp(30),1));widgetNames.addView(right,new LinearLayout.LayoutParams(0,dp(30),1));add(shell,widgetNames,-1,32);
     space(shell,10);
     String[][] names={
@@ -454,10 +474,61 @@ public class MainActivity extends Activity {
     shell.setOnTouchListener((v,e)->{if(e.getAction()==MotionEvent.ACTION_DOWN){downX=e.getX();downY=e.getY();return true;}if(e.getAction()==MotionEvent.ACTION_UP){float dx=e.getX()-downX,dy=e.getY()-downY;if(dy>dp(65))controls();else if(dy< -dp(65)||dx< -dp(95))library();else if(dx>dp(95))notifications();return true;}return true;});
   }
   private void library(){
-    refresh();canvas("library");title("App Library");EditText input=new EditText(this);input.setSingleLine();input.setHint("⌕  Search");input.setTextSize(17);input.setPadding(dp(20),0,dp(15),0);setGlass(input,19);margin(shell,input,52,20);input.setContentDescription("Search installed applications");
-    ScrollView scroll=new ScrollView(this);scroll.setVerticalScrollBarEnabled(false);scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);scroll.setFillViewport(true);LinearLayout content=column();scroll.addView(content);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-    Runnable update=()->{content.removeAllViews();ArrayList<ResolveInfo> chosen=new ArrayList<>();String q=input.getText().toString().toLowerCase(Locale.ROOT);for(ResolveInfo a:apps)if(a.loadLabel(pm).toString().toLowerCase(Locale.ROOT).contains(q))chosen.add(a);grid(content,chosen);};
-    input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){}public void onTextChanged(CharSequence s,int st,int before,int count){update.run();}public void afterTextChanged(Editable e){}});update.run();enter(scroll);
+    refresh();canvas("library");title("App Library");
+    EditText input=new EditText(this);input.setSingleLine();input.setHint("Search apps and settings");
+    input.setTextSize(17);input.setPadding(dp(18),0,dp(15),0);setGlass(input,19);
+    margin(shell,input,52,12);input.setContentDescription("Search installed applications");
+    LinearLayout filterBar=horizontal();
+    final String[] filters={"All","Favorites","A–M","N–Z"};
+    LinearLayout results=column();
+    ScrollView scroll=new ScrollView(this);scroll.setVerticalScrollBarEnabled(false);
+    scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);scroll.addView(results);shell.addView(filterBar,new LinearLayout.LayoutParams(-1,dp(48)));
+    shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+    final int[] selected={0};
+    Runnable update=()->{
+      results.removeAllViews();
+      String q=input.getText().toString().toLowerCase(Locale.ROOT).trim();
+      ArrayList<ResolveInfo> found=new ArrayList<>();
+      for(ResolveInfo app:apps){
+        String name=app.loadLabel(pm).toString().toLowerCase(Locale.ROOT);
+        if(!name.contains(q))continue;
+        if(selected[0]==2&&name.compareTo("n")>=0)continue;
+        if(selected[0]==3&&name.compareTo("n")<0)continue;
+        if(selected[0]==1&&!getPreferences(0).getBoolean("favorite_"+app.activityInfo.packageName,false))continue;
+        found.add(app);
+      }
+      TextView count=text(found.size()+" apps",13,foreground());count.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);
+      add(results,count,-1,30);
+      if(found.isEmpty()){
+        TextView empty=text("No matching apps",17,foreground());add(results,empty,-1,140);
+      }else{
+        for(ResolveInfo app:found){
+          LinearLayout item=horizontal();item.setPadding(dp(10),dp(8),dp(10),dp(8));
+          ImageView ico=new ImageView(this);ico.setImageDrawable(app.loadIcon(pm));applyIconTint(ico);add(item,ico,44,44);
+          TextView name=text(app.loadLabel(pm).toString(),16,foreground());name.setGravity(Gravity.CENTER_VERTICAL|Gravity.LEFT);
+          LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(52),1);lp.leftMargin=dp(16);item.addView(name,lp);
+          String pkg=app.activityInfo.packageName;boolean fav=getPreferences(0).getBoolean("favorite_"+pkg,false);
+          TextView star=text(fav?"★":"☆",25,foreground());add(item,star,42,50);
+          touch(star,()->{getPreferences(0).edit().putBoolean("favorite_"+pkg,!fav).apply();updateSearch(input,selected[0],results);});
+          item.setOnClickListener(v->launch(app));
+          item.setOnLongClickListener(v->{showAppMenu(v,app.loadLabel(pm).toString(),app,0);return true;});
+          LinearLayout.LayoutParams row=new LinearLayout.LayoutParams(-1,dp(64));row.bottomMargin=dp(4);results.addView(item,row);
+        }
+      }
+    };
+    for(int i=0;i<filters.length;i++){
+      final int n=i;TextView choice=text(filters[i],12,foreground());setGlass(choice,16);
+      LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(37),1);lp.setMargins(dp(2),0,dp(2),0);filterBar.addView(choice,lp);
+      touch(choice,()->{selected[0]=n;update.run();});
+    }
+    input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence t,int st,int c,int a){}
+      public void onTextChanged(CharSequence t,int st,int before,int count){update.run();}
+      public void afterTextChanged(Editable e){}});
+    update.run();enter(scroll);
+  }
+  private void updateSearch(EditText field,int selected,LinearLayout results){
+    // Reopening the library refreshes favorite badges and keeps the query.
+    String current=field.getText().toString();library();
   }
   private TextView button(String label,Runnable run){
     TextView v=text(label,18,foreground());setGlass(v,21);touch(v,run);return v;
@@ -487,7 +558,7 @@ public class MainActivity extends Activity {
     for(android.service.notification.StatusBarNotification n:ns){
       CharSequence t=n.getNotification().extras.getCharSequence(Notification.EXTRA_TITLE);
       CharSequence msg=n.getNotification().extras.getCharSequence(Notification.EXTRA_TEXT);
-      TextView card=button((t==null?n.getPackageName():t.toString())+"\n"+(msg==null?"":msg),()->{try{if(n.getNotification().contentIntent!=null)n.getNotification().contentIntent.send();}catch(Exception ignored){}});
+      TextView card=button((t==null?n.getPackageName():t.toString())+"\n"+(hidePrivateNotifications?"Preview hidden":(msg==null?"":msg)),()->{try{if(n.getNotification().contentIntent!=null)n.getNotification().contentIntent.send();}catch(Exception ignored){}});
       card.setPadding(dp(16),dp(14),dp(16),dp(14));margin(items,card,100,10);card.setContentDescription("Notification: "+(t==null?n.getPackageName():t.toString()));
     }
   }
@@ -506,6 +577,8 @@ public class MainActivity extends Activity {
     line("Customise Home Screen",this::editHome);
     line("Status clock seconds: "+(showSeconds?"On":"Off"),()->{showSeconds=!showSeconds;getPreferences(0).edit().putBoolean("showSeconds",showSeconds).apply();settings();});
     line("Icon appearance: "+tintLabels[iconTint],this::iconAppearance);
+    line("Top widget: "+(widgetMode==1?"Clock":"Battery"),this::chooseWidget);
+    line("Hide notification previews: "+(hidePrivateNotifications?"On":"Off"),()->{hidePrivateNotifications=!hidePrivateNotifications;getPreferences(0).edit().putBoolean("hidePrivateNotifications",hidePrivateNotifications).apply();settings();});
     line("Glass contrast: "+(highContrastGlass?"High":"Standard"),()->{
       highContrastGlass=!highContrastGlass;getPreferences(0).edit().putBoolean("highContrastGlass",highContrastGlass).apply();settings();
     });
@@ -515,7 +588,7 @@ public class MainActivity extends Activity {
     line("App permissions",()->startActivity(new Intent(Settings.ACTION_APPLICATION_SETTINGS)));
     line("Battery settings",()->startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)));
     space(shell,18);
-    TextView note=text("GlassOS 0.7  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
+    TextView note=text("GlassOS 0.8  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
   }
   @Override public void onBackPressed(){if(page.equals("home"))super.onBackPressed();else home();}
 }
