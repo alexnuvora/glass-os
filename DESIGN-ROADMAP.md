@@ -1,16 +1,9 @@
-# GlassOS design implementation matrix
+# GlassOS 0.5 design batch
 
-Inspired by Apple's public design guidance: https://developer.apple.com/design/whats-new/
+Official reference: https://developer.apple.com/design/whats-new/
 
-## Batch release
-- Home screen: four-column grid, paired widgets, dock, search and gesture navigation
-- Glass: multi-stop translucent fill, specular stroke and touch scale response
-- Apps: searchable installed application library with live refresh
-- Context menus: launch, app information, launcher preferences
-- Controls: wireless, Bluetooth, audio, display and mobile settings access
-- Preferences: light/dark theme, icon size, reduce-motion, wallpaper, app permissions and battery access
-- Accessibility: labels, reduce motion preference and haptics
-- Notifications: user-enabled notification listener view
+Implemented: selectable home-screen app slots; 4 editable dock positions; folder creation and editing via multi-select; folder opening and launch; move and swap home positions via menus; reset layout; persistent choices; icon saturation modes; four wallpaper presets; live battery percentage and current-date widget; spring press feedback; transition easing; sampled and softened launcher wallpaper behind glass surfaces with slight offset for refractive appearance; accessibility reduce-motion option; app library and notification viewer; Control Centre shortcuts.
 
-## Not implemented / platform restricted
-True Apple optical refraction, direct Wi-Fi and Bluetooth control without Android permissions, protected lockscreen UI, system-wide settings replacement, app internals, custom system app switcher. This is an independent iOS-inspired implementation rather than Apple code or assets.
+Not implemented: Apple's proprietary Liquid Glass renderer; realtime blurring of arbitrary third-party applications; actual weather provider feed; Android AppWidget host embedding; drag-and-drop reordering; per-pixel GPU liquid physics or true operating-system-level iOS menus; replacement of protected system Settings/lockscreen/app switcher.
+
+GlassOS renders its own effects using Android drawing APIs. No Apple copyrighted assets or private frameworks are included.

@@ -22,6 +22,9 @@ public class MainActivity extends Activity {
   private boolean dark=false, large=false, reduceMotion=false;
   private int wallpaperStyle=0;
   private final String[] wallpaperNames={"Sky","Midnight","Sunset","Ocean"};
+  private Bitmap blurredBackdrop;
+  private int iconTint=0;
+  private final String[] tintLabels={"Original","Monochrome","Soft tint"};
   private float downX, downY;
   private final int WHITE=Color.WHITE;
   private int dp(float n){return (int)(n*getResources().getDisplayMetrics().density+0.5f);}
@@ -32,21 +35,46 @@ public class MainActivity extends Activity {
   }
   // Android Canvas approximation of Apple's dynamic glass material.
   // Optical highlights and touch response are real; backdrop refraction is not available here.
-  private Drawable translucent(float radius){return new GlassSurface(radius);}
+  private Drawable translucent(float radius){return new GlassSurface(radius,null);}
+  private void setGlass(View v,float radius){v.setBackground(new GlassSurface(radius,v));}
+  private Bitmap backdrop(){
+    int width=Math.max(1,getResources().getDisplayMetrics().widthPixels);
+    int height=Math.max(1,getResources().getDisplayMetrics().heightPixels);
+    if(blurredBackdrop!=null)return blurredBackdrop;
+    Bitmap original=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);
+    Wallpaper wallpaper=new Wallpaper();wallpaper.setBounds(0,0,width,height);wallpaper.draw(new Canvas(original));
+    int smallWidth=Math.max(1,width/18),smallHeight=Math.max(1,height/18);
+    Bitmap reduced=Bitmap.createScaledBitmap(original,smallWidth,smallHeight,true);
+    blurredBackdrop=Bitmap.createScaledBitmap(reduced,width,height,true);
+    original.recycle();reduced.recycle();return blurredBackdrop;
+  }
   private class GlassSurface extends Drawable {
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final float radius;
     private final Path outline=new Path();
-    GlassSurface(float r){radius=r;}
+    private final View anchor;
+    GlassSurface(float r,View owner){radius=r;anchor=owner;}
     @Override public void draw(Canvas canvas){
       Rect bounds=getBounds();float w=bounds.width(),h=bounds.height();if(w<=0||h<=0)return;
       float r=Math.min(dp(radius),Math.min(w,h)/2f);
       RectF box=new RectF(bounds.left+dp(1),bounds.top+dp(1),bounds.right-dp(1),bounds.bottom-dp(1));
+      // Sample the actual launcher wallpaper as a low-pass filtered background,
+      // with a small displacement for an optical lens-like shift.
+      if(anchor!=null){
+        Bitmap image=backdrop();
+        BitmapShader shader=new BitmapShader(image,Shader.TileMode.CLAMP,Shader.TileMode.CLAMP);
+        int[] pos=new int[2];anchor.getLocationOnScreen(pos);
+        Matrix matrix=new Matrix();matrix.setTranslate(-pos[0]+dp(2),-pos[1]+dp(2));shader.setLocalMatrix(matrix);
+        canvas.save();
+        Path clip=new Path();clip.addRoundRect(box,r,r,Path.Direction.CW);canvas.clipPath(clip);
+        paint.setStyle(Paint.Style.FILL);paint.setShader(shader);canvas.drawRect(box,paint);
+        paint.setShader(null);canvas.restore();
+      }
       // Layered tinted translucency with brighter rim at the top edge.
       paint.setStyle(Paint.Style.FILL);
       paint.setShader(new LinearGradient(0,bounds.top,0,bounds.bottom,
-        dark?new int[]{0x99b9c4e1,0x557e8aab,0x66818cae}:
-             new int[]{0xb7ffffff,0x6ad6e4fa,0x8be8efff},
+        dark?new int[]{0x88b9c4e1,0x447e8aab,0x55818cae}:
+             new int[]{0x55ffffff,0x24d6e4fa,0x55e8efff},
         new float[]{0f,.44f,1f},Shader.TileMode.CLAMP));
       canvas.drawRoundRect(box,r,r,paint);paint.setShader(null);
       paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(1.3f));
@@ -89,8 +117,8 @@ public class MainActivity extends Activity {
   private void margin(LinearLayout host,View child,int h,int bottom){
     LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(h));p.bottomMargin=dp(bottom);host.addView(child,p);
   }
-  private TextView pill(String label,Runnable action){TextView t=text(label,15,foreground());t.setBackground(translucent(30));touch(t,action);return t;}
-  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
+  private TextView pill(String label,Runnable action){TextView t=text(label,15,foreground());setGlass(t,30);touch(t,action);return t;}
+  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);iconTint=getPreferences(0).getInt("iconTint",0);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
   private void refresh(){
     apps.clear();Intent i=new Intent(Intent.ACTION_MAIN);i.addCategory(Intent.CATEGORY_LAUNCHER);
     apps.addAll(pm.queryIntentActivities(i,0));apps.removeIf(a->getPackageName().equals(a.activityInfo.packageName));
@@ -101,7 +129,7 @@ public class MainActivity extends Activity {
     catch(Exception e){Toast.makeText(this,"Can't open this app",Toast.LENGTH_SHORT).show();}
   }
   private void canvas(String id){
-    page=id;shell=column();shell.setPadding(dp(18),dp(48),dp(18),dp(25));shell.setBackground(new Wallpaper());setContentView(shell);
+    page=id;shell=column();shell.setPadding(dp(18),dp(48),dp(18),dp(25));shell.setBackground(new Wallpaper());setContentView(shell);if(!id.equals("home"))enter(shell);
   }
   private class Wallpaper extends android.graphics.drawable.Drawable {
     Paint p=new Paint(3);
@@ -122,7 +150,7 @@ public class MainActivity extends Activity {
   }
   private View appTile(ResolveInfo info){
     LinearLayout tile=column();tile.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
-    FrameLayout iconWrap=new FrameLayout(this);iconWrap.setBackground(translucent(17));iconWrap.setClipToOutline(true);
+    FrameLayout iconWrap=new FrameLayout(this);setGlass(iconWrap,17);iconWrap.setClipToOutline(true);
     ImageView image=new ImageView(this);image.setImageDrawable(info.loadIcon(pm));image.setScaleType(ImageView.ScaleType.FIT_CENTER);
     FrameLayout.LayoutParams ip=new FrameLayout.LayoutParams(-1,-1);ip.setMargins(dp(2),dp(2),dp(2),dp(2));iconWrap.addView(image,ip);
     add(tile,iconWrap,large?70:61,large?70:61);
@@ -146,16 +174,24 @@ public class MainActivity extends Activity {
   private TextView iconFallback(String symbol,int background){
     TextView v=text(symbol,29,Color.WHITE);v.setBackground(shape(background,17));return v;
   }
+  private void applyIconTint(ImageView view){
+    if(iconTint==1){ColorMatrix matrix=new ColorMatrix();matrix.setSaturation(0);view.setColorFilter(new ColorMatrixColorFilter(matrix));}
+    else if(iconTint==2){ColorMatrix matrix=new ColorMatrix();matrix.setSaturation(.5f);view.setColorFilter(new ColorMatrixColorFilter(matrix));}
+  }
   private View referenceIcon(String label,String glyph,int color,int index,String... packages){
     LinearLayout tile=column();tile.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);
     ResolveInfo installed=savedApp(index,packages);
-    FrameLayout icon=new FrameLayout(this);icon.setBackground(translucent(16));icon.setClipToOutline(true);
-    if(installed!=null){ImageView image=new ImageView(this);image.setImageDrawable(installed.loadIcon(pm));image.setScaleType(ImageView.ScaleType.FIT_XY);icon.addView(image,new FrameLayout.LayoutParams(-1,-1));}
+    String folder=getPreferences(0).getString("folder_"+index,"");
+    if(!folder.isEmpty())label="Folder";
+    FrameLayout icon=new FrameLayout(this);setGlass(icon,16);icon.setClipToOutline(true);
+    if(folder.length()>0){TextView fIcon=iconFallback("▦",0x996c87c1);icon.addView(fIcon,new FrameLayout.LayoutParams(-1,-1));}
+    else if(installed!=null){ImageView image=new ImageView(this);image.setImageDrawable(installed.loadIcon(pm));image.setScaleType(ImageView.ScaleType.FIT_XY);
+      applyIconTint(image);icon.addView(image,new FrameLayout.LayoutParams(-1,-1));}
     else {TextView fallback=iconFallback(glyph,color);icon.addView(fallback,new FrameLayout.LayoutParams(-1,-1));}
     LinearLayout.LayoutParams ip=new LinearLayout.LayoutParams(dp(60),dp(60));tile.addView(icon,ip);
-    TextView name=text(label,12,Color.WHITE);name.setSingleLine();name.setEllipsize(TextUtils.TruncateAt.END);name.setShadowLayer(4,0,1,0xaa1f1b20);
+    TextView name=text(folder.isEmpty() && installed!=null?installed.loadLabel(pm).toString():label,12,Color.WHITE);name.setSingleLine();name.setEllipsize(TextUtils.TruncateAt.END);name.setShadowLayer(4,0,1,0xaa1f1b20);
     LinearLayout.LayoutParams np=new LinearLayout.LayoutParams(-1,dp(22));np.topMargin=dp(5);tile.addView(name,np);
-    tile.setOnClickListener(v->{if(installed!=null)launch(installed);else library();});
+    tile.setOnClickListener(v->{if(!folder.isEmpty())openFolder(index);else if(installed!=null)launch(installed);else library();});
     tile.setContentDescription("Open "+label);
     tile.setOnLongClickListener(v->{showAppMenu(v,label,installed,index);return true;});
     return tile;
@@ -167,13 +203,15 @@ public class MainActivity extends Activity {
     menu.getMenu().add("All apps");
     menu.getMenu().add("Home screen settings");
     menu.getMenu().add("Change app in this position");
+    if(index<16)menu.getMenu().add("Create or edit folder");
+    if(index<16)menu.getMenu().add("Move icon");
     menu.setOnMenuItemClickListener(item->{
       String choice=item.getTitle().toString();
       if(choice.startsWith("Open")){if(installed!=null)launch(installed);else library();}
       else if(choice.equals("App info") && installed!=null){
         Intent intent=new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
         intent.setData(android.net.Uri.parse("package:"+installed.activityInfo.packageName));startActivity(intent);
-      }else if(choice.equals("Home screen settings"))settings();else if(choice.equals("Change app in this position"))pickApp(index);else library();
+      }else if(choice.equals("Home screen settings"))settings();else if(choice.equals("Change app in this position"))pickApp(index);else if(choice.equals("Create or edit folder"))editFolder(index);else if(choice.equals("Move icon"))moveIcon(index);else library();
       return true;
     });
     anchor.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
@@ -204,9 +242,25 @@ public class MainActivity extends Activity {
   private void chooseWallpaper(){
     new AlertDialog.Builder(this).setTitle("Wallpaper")
       .setSingleChoiceItems(wallpaperNames,wallpaperStyle,(dialog,index)->{
-        wallpaperStyle=index;getPreferences(0).edit().putInt("wallpaperStyle",index).apply();
+        wallpaperStyle=index;blurredBackdrop=null;getPreferences(0).edit().putInt("wallpaperStyle",index).apply();
         dialog.dismiss();settings();
       }).setNegativeButton("Cancel",null).show();
+  }
+  private void editHome(){
+    final String[] choices={"Select home screen position","Choose folder contents","Choose icon appearance","Wallpaper","Reset arrangement"};
+    new AlertDialog.Builder(this).setTitle("Customise Home Screen").setItems(choices,(dialog,which)->{
+      if(which==0)choosePosition(false);
+      else if(which==1)choosePosition(true);
+      else if(which==2)iconAppearance();
+      else if(which==3)chooseWallpaper();
+      else resetLayout();
+    }).setNegativeButton("Close",null).show();
+  }
+  private void choosePosition(boolean folder){
+    String[] slots=new String[16];for(int i=0;i<16;i++)slots[i]="Icon "+(i+1);
+    new AlertDialog.Builder(this).setTitle("Choose position").setItems(slots,(dialog,which)->{
+      if(folder)editFolder(which);else pickApp(which);
+    }).setNegativeButton("Cancel",null).show();
   }
   private void resetLayout(){
     new AlertDialog.Builder(this).setTitle("Reset Home Screen?")
@@ -214,9 +268,63 @@ public class MainActivity extends Activity {
       .setNegativeButton("Cancel",null)
       .setPositiveButton("Reset",(dialog,which)->{
         android.content.SharedPreferences.Editor edit=getPreferences(0).edit();
-        for(int i=0;i<20;i++)edit.remove("slot_"+i);
+        for(int i=0;i<20;i++){edit.remove("slot_"+i);edit.remove("folder_"+i);}
         edit.apply();home();
       }).show();
+  }
+  private ResolveInfo byPackage(String pkg){
+    for(ResolveInfo app:apps)if(app.activityInfo.packageName.equals(pkg))return app;
+    return null;
+  }
+  private void editFolder(int position){
+    String existing=getPreferences(0).getString("folder_"+position,"");
+    boolean[] selected=new boolean[apps.size()];
+    ArrayList<String> paths=new ArrayList<>();
+    if(!existing.isEmpty())paths.addAll(Arrays.asList(existing.split(",")));
+    String[] names=new String[apps.size()];
+    for(int i=0;i<apps.size();i++){names[i]=apps.get(i).loadLabel(pm).toString();selected[i]=paths.contains(apps.get(i).activityInfo.packageName);}
+    new AlertDialog.Builder(this).setTitle("Folder apps")
+      .setMultiChoiceItems(names,selected,(dialog,which,checked)->selected[which]=checked)
+      .setNeutralButton("Remove folder",(dialog,which)->{getPreferences(0).edit().remove("folder_"+position).apply();home();})
+      .setNegativeButton("Cancel",null)
+      .setPositiveButton("Save",(dialog,which)->{
+        StringBuilder combined=new StringBuilder();
+        for(int i=0;i<selected.length;i++)if(selected[i]){
+          if(combined.length()>0)combined.append(",");
+          combined.append(apps.get(i).activityInfo.packageName);
+        }
+        getPreferences(0).edit().putString("folder_"+position,combined.toString()).apply();home();
+      }).show();
+  }
+  private void openFolder(int position){
+    String contents=getPreferences(0).getString("folder_"+position,"");
+    String[] packageIds=contents.split(",");
+    ArrayList<ResolveInfo> members=new ArrayList<>();
+    for(String pkg:packageIds){ResolveInfo a=byPackage(pkg);if(a!=null)members.add(a);}
+    String[] labels=new String[members.size()];
+    for(int i=0;i<members.size();i++)labels[i]=members.get(i).loadLabel(pm).toString();
+    new AlertDialog.Builder(this).setTitle("Folder")
+      .setItems(labels,(dialog,which)->launch(members.get(which)))
+      .setPositiveButton("Edit", (dialog,which)->editFolder(position))
+      .setNegativeButton("Close",null).show();
+  }
+  private void moveIcon(int position){
+    String[] slots=new String[16];for(int i=0;i<16;i++)slots[i]="Position "+(i+1);
+    new AlertDialog.Builder(this).setTitle("Move to")
+      .setItems(slots,(dialog,target)->{
+        if(target==position)return;
+        android.content.SharedPreferences prefs=getPreferences(0);
+        String a=prefs.getString("slot_"+position,""),b=prefs.getString("slot_"+target,"");
+        String fa=prefs.getString("folder_"+position,""),fb=prefs.getString("folder_"+target,"");
+        prefs.edit().putString("slot_"+position,b).putString("slot_"+target,a)
+          .putString("folder_"+position,fb).putString("folder_"+target,fa).apply();home();
+      }).setNegativeButton("Cancel",null).show();
+  }
+  private void iconAppearance(){
+    new AlertDialog.Builder(this).setTitle("Icon appearance")
+      .setSingleChoiceItems(tintLabels,iconTint,(dialog,which)->{
+        iconTint=which;getPreferences(0).edit().putInt("iconTint",which).apply();dialog.dismiss();home();
+      }).setNegativeButton("Cancel",null).show();
   }
   private void home(){
     canvas("home");
@@ -226,11 +334,13 @@ public class MainActivity extends Activity {
     LinearLayout tiles=horizontal();tiles.setGravity(Gravity.TOP);
     LinearLayout weather=column();weather.setPadding(dp(16),dp(15),dp(10),dp(12));
     weather.setBackground(shape(0xff3479b4,29));
-    TextView city=text("Weather  ↗",14,WHITE);city.setTypeface(null,1);city.setGravity(Gravity.LEFT);add(weather,city,-1,24);
-    TextView temp=text("☀",59,WHITE);temp.setGravity(Gravity.LEFT);add(weather,temp,-1,80);
-    TextView condition=text("Weather",16,WHITE);condition.setGravity(Gravity.LEFT);add(weather,condition,-1,30);
-    TextView hint=text("Tap to open",12,0xffdceeff);hint.setGravity(Gravity.LEFT);add(weather,hint,-1,23);
-    weather.setOnClickListener(v->{ResolveInfo w=match("weather");if(w!=null)launch(w);else library();});
+    TextView city=text("BATTERY  ↗",14,WHITE);city.setTypeface(null,1);city.setGravity(Gravity.LEFT);add(weather,city,-1,24);
+    android.os.BatteryManager battery=(android.os.BatteryManager)getSystemService(BATTERY_SERVICE);
+    int charge=battery==null?-1:battery.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY);
+    TextView temp=text(charge>=0?charge+"%":"☀",47,WHITE);temp.setGravity(Gravity.LEFT);add(weather,temp,-1,80);
+    TextView condition=text("Battery",16,WHITE);condition.setGravity(Gravity.LEFT);add(weather,condition,-1,30);
+    TextView hint=text("Device status",12,0xffdceeff);hint.setGravity(Gravity.LEFT);add(weather,hint,-1,23);
+    weather.setOnClickListener(v->startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)));
     LinearLayout.LayoutParams wp=new LinearLayout.LayoutParams(0,dp(155),1);wp.rightMargin=dp(9);tiles.addView(weather,wp);
     LinearLayout calendar=column();calendar.setPadding(dp(16),dp(15),dp(10),dp(12));calendar.setBackground(shape(WHITE,29));
     TextView weekday=text(new java.text.SimpleDateFormat("EEEE",Locale.UK).format(new Date()).toUpperCase(Locale.UK),13,0xffee5356);weekday.setGravity(Gravity.LEFT);weekday.setTypeface(null,1);add(calendar,weekday,-1,27);
@@ -240,7 +350,7 @@ public class MainActivity extends Activity {
     tiles.addView(calendar,new LinearLayout.LayoutParams(0,dp(155),1));
     add(shell,tiles,-1,155);
     LinearLayout widgetNames=horizontal();
-    TextView left=text("Weather",12,WHITE);TextView right=text("Calendar",12,WHITE);
+    TextView left=text("Battery",12,WHITE);TextView right=text("Calendar",12,WHITE);
     widgetNames.addView(left,new LinearLayout.LayoutParams(0,dp(30),1));widgetNames.addView(right,new LinearLayout.LayoutParams(0,dp(30),1));add(shell,widgetNames,-1,32);
     space(shell,10);
     String[][] names={
@@ -275,16 +385,16 @@ public class MainActivity extends Activity {
       add(iconRows,strip,-1,94);
     }
     shell.addView(iconRows,new LinearLayout.LayoutParams(-1,0,1));
-    TextView search=text("⌕  Search",14,0xfff5f5f8);search.setBackground(translucent(30));
+    TextView search=text("⌕  Search",14,0xfff5f5f8);setGlass(search,30);
     LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(dp(100),dp(35));sp.gravity=Gravity.CENTER;sp.bottomMargin=dp(19);shell.addView(search,sp);touch(search,this::library);
-    LinearLayout dock=horizontal();dock.setGravity(Gravity.CENTER);dock.setPadding(dp(9),dp(11),dp(9),dp(8));dock.setBackground(translucent(35));
+    LinearLayout dock=horizontal();dock.setGravity(Gravity.CENTER);dock.setPadding(dp(9),dp(11),dp(9),dp(8));setGlass(dock,35);
     String[] dockNames={"Phone","Browser","Messages","Music"};
     String[] dockGlyphs={"☎","◉","●","♫"};int[] dockColors={0xff20d958,0xff238fe8,0xff25d95a,0xffe93453};
     String[][] dockPackages={{"dialer","phone"},{"chrome","browser"},{"messaging","sms"},{"spotify","music"}};
     for(int i=0;i<4;i++){
       ResolveInfo item=savedApp(16+i,dockPackages[i]);final int dockIndex=16+i;FrameLayout slot=new FrameLayout(this);
       View icon;
-      if(item!=null){ImageView img=new ImageView(this);img.setImageDrawable(item.loadIcon(pm));icon=img;touch(slot,()->launch(item));}
+      if(item!=null){ImageView img=new ImageView(this);img.setImageDrawable(item.loadIcon(pm));applyIconTint(img);icon=img;touch(slot,()->launch(item));}
       else{icon=iconFallback(dockGlyphs[i],dockColors[i]);touch(slot,this::library);}
       FrameLayout.LayoutParams frame=new FrameLayout.LayoutParams(dp(61),dp(61),Gravity.CENTER);slot.addView(icon,frame);
       slot.setOnLongClickListener(v->{pickApp(dockIndex);return true;});
@@ -295,13 +405,13 @@ public class MainActivity extends Activity {
     shell.setOnTouchListener((v,e)->{if(e.getAction()==MotionEvent.ACTION_DOWN){downX=e.getX();downY=e.getY();return true;}if(e.getAction()==MotionEvent.ACTION_UP){float dx=e.getX()-downX,dy=e.getY()-downY;if(dy>dp(65))controls();else if(dy< -dp(65)||dx< -dp(95))library();else if(dx>dp(95))notifications();return true;}return true;});
   }
   private void library(){
-    refresh();canvas("library");title("App Library");EditText input=new EditText(this);input.setSingleLine();input.setHint("⌕  Search");input.setTextSize(17);input.setPadding(dp(20),0,dp(15),0);input.setBackground(translucent(19));margin(shell,input,52,20);input.setContentDescription("Search installed applications");
+    refresh();canvas("library");title("App Library");EditText input=new EditText(this);input.setSingleLine();input.setHint("⌕  Search");input.setTextSize(17);input.setPadding(dp(20),0,dp(15),0);setGlass(input,19);margin(shell,input,52,20);input.setContentDescription("Search installed applications");
     ScrollView scroll=new ScrollView(this);scroll.setVerticalScrollBarEnabled(false);scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);scroll.setFillViewport(true);LinearLayout content=column();scroll.addView(content);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
     Runnable update=()->{content.removeAllViews();ArrayList<ResolveInfo> chosen=new ArrayList<>();String q=input.getText().toString().toLowerCase(Locale.ROOT);for(ResolveInfo a:apps)if(a.loadLabel(pm).toString().toLowerCase(Locale.ROOT).contains(q))chosen.add(a);grid(content,chosen);};
     input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){}public void onTextChanged(CharSequence s,int st,int before,int count){update.run();}public void afterTextChanged(Editable e){}});update.run();enter(scroll);
   }
   private TextView button(String label,Runnable run){
-    TextView v=text(label,18,foreground());v.setBackground(translucent(21));touch(v,run);return v;
+    TextView v=text(label,18,foreground());setGlass(v,21);touch(v,run);return v;
   }
   private void line(String title,Runnable run){TextView b=button(title+"    ›",run);b.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);b.setPadding(dp(20),0,dp(14),0);margin(shell,b,57,12);}
   private void controls(){
@@ -344,12 +454,14 @@ public class MainActivity extends Activity {
     line("Refresh installed apps",()->{refresh();home();});
     line("Reduce motion: "+(reduceMotion?"On":"Off"),()->{reduceMotion=!reduceMotion;getPreferences(0).edit().putBoolean("reduceMotion",reduceMotion).apply();settings();});
     line("Wallpaper: "+wallpaperNames[wallpaperStyle],this::chooseWallpaper);
-    line("Edit Home Screen apps",()->pickApp(0));
+    line("Customise Home Screen",this::editHome);
+    line("Icon appearance: "+tintLabels[iconTint],this::iconAppearance);
+    
     line("Reset Home Screen layout",this::resetLayout);
     line("App permissions",()->startActivity(new Intent(Settings.ACTION_APPLICATION_SETTINGS)));
     line("Battery settings",()->startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)));
     space(shell,18);
-    TextView note=text("GlassOS 0.4  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
+    TextView note=text("GlassOS 0.5  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
   }
   @Override public void onBackPressed(){if(page.equals("home"))super.onBackPressed();else home();}
 }
