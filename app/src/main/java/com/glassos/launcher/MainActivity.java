@@ -509,9 +509,9 @@ public class MainActivity extends Activity {
           LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(52),1);lp.leftMargin=dp(16);item.addView(name,lp);
           String pkg=app.activityInfo.packageName;boolean fav=getPreferences(0).getBoolean("favorite_"+pkg,false);
           TextView star=text(fav?"★":"☆",25,foreground());add(item,star,42,50);
-          touch(star,()->{getPreferences(0).edit().putBoolean("favorite_"+pkg,!fav).apply();updateSearch(input,selected[0],results);});
+          touch(star,()->{getPreferences(0).edit().putBoolean("favorite_"+pkg,!fav).apply();library();});
           item.setOnClickListener(v->launch(app));
-          item.setOnLongClickListener(v->{showAppMenu(v,app.loadLabel(pm).toString(),app,0);return true;});
+          item.setOnLongClickListener(v->{Intent info=new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);info.setData(android.net.Uri.parse("package:"+pkg));startActivity(info);return true;});
           LinearLayout.LayoutParams row=new LinearLayout.LayoutParams(-1,dp(64));row.bottomMargin=dp(4);results.addView(item,row);
         }
       }
@@ -525,10 +525,6 @@ public class MainActivity extends Activity {
       public void onTextChanged(CharSequence t,int st,int before,int count){update.run();}
       public void afterTextChanged(Editable e){}});
     update.run();enter(scroll);
-  }
-  private void updateSearch(EditText field,int selected,LinearLayout results){
-    // Reopening the library refreshes favorite badges and keeps the query.
-    String current=field.getText().toString();library();
   }
   private TextView button(String label,Runnable run){
     TextView v=text(label,18,foreground());setGlass(v,21);touch(v,run);return v;
