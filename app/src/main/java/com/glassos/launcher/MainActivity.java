@@ -21,6 +21,7 @@ public class MainActivity extends Activity {
   private String page="home";
   private boolean dark=false, large=false, reduceMotion=false;
   private int wallpaperStyle=0;
+  private boolean showSeconds=false;
   private final String[] wallpaperNames={"Sky","Midnight","Sunset","Ocean"};
   private Bitmap blurredBackdrop;
   private int iconTint=0;
@@ -118,7 +119,7 @@ public class MainActivity extends Activity {
     LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(h));p.bottomMargin=dp(bottom);host.addView(child,p);
   }
   private TextView pill(String label,Runnable action){TextView t=text(label,15,foreground());setGlass(t,30);touch(t,action);return t;}
-  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);iconTint=getPreferences(0).getInt("iconTint",0);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
+  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);wallpaperStyle=getPreferences(0).getInt("wallpaperStyle",0);iconTint=getPreferences(0).getInt("iconTint",0);showSeconds=getPreferences(0).getBoolean("showSeconds",false);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
   private void refresh(){
     apps.clear();Intent i=new Intent(Intent.ACTION_MAIN);i.addCategory(Intent.CATEGORY_LAUNCHER);
     apps.addAll(pm.queryIntentActivities(i,0));apps.removeIf(a->getPackageName().equals(a.activityInfo.packageName));
@@ -298,17 +299,37 @@ public class MainActivity extends Activity {
   }
   private void openFolder(int position){
     String contents=getPreferences(0).getString("folder_"+position,"");
-    String[] packageIds=contents.split(",");
     ArrayList<ResolveInfo> members=new ArrayList<>();
-    for(String pkg:packageIds){ResolveInfo a=byPackage(pkg);if(a!=null)members.add(a);}
-    String[] labels=new String[members.size()];
-    for(int i=0;i<members.size();i++)labels[i]=members.get(i).loadLabel(pm).toString();
-    new AlertDialog.Builder(this).setTitle("Folder")
-      .setItems(labels,(dialog,which)->launch(members.get(which)))
-      .setPositiveButton("Edit", (dialog,which)->editFolder(position))
-      .setNegativeButton("Close",null).show();
+    for(String pkg:contents.split(",")){ResolveInfo app=byPackage(pkg);if(app!=null)members.add(app);}
+    if(members.isEmpty()){editFolder(position);return;}
+    final Dialog dialog=new Dialog(this);
+    LinearLayout panel=column();panel.setPadding(dp(20),dp(18),dp(20),dp(18));
+    setGlass(panel,32);
+    TextView heading=text("Folder",24,foreground());heading.setGravity(Gravity.CENTER);add(panel,heading,-1,56);
+    for(int start=0;start<members.size();start+=3){
+      LinearLayout strip=horizontal();strip.setGravity(Gravity.TOP);
+      for(int j=start;j<start+3;j++){
+        if(j>=members.size()){strip.addView(new View(this),new LinearLayout.LayoutParams(0,dp(100),1));continue;}
+        ResolveInfo app=members.get(j);
+        LinearLayout tile=column();tile.setGravity(Gravity.CENTER_HORIZONTAL);
+        ImageView icon=new ImageView(this);icon.setImageDrawable(app.loadIcon(pm));applyIconTint(icon);
+        add(tile,icon,61,61);
+        TextView name=text(app.loadLabel(pm).toString(),11,foreground());name.setSingleLine(true);name.setEllipsize(TextUtils.TruncateAt.END);
+        add(tile,name,-1,27);
+        touch(tile,()->{dialog.dismiss();launch(app);});
+        strip.addView(tile,new LinearLayout.LayoutParams(0,dp(101),1));
+      }
+      add(panel,strip,-1,105);
+    }
+    TextView edit=button("Edit folder",()->{dialog.dismiss();editFolder(position);});margin(panel,edit,48,0);
+    dialog.setContentView(panel);
+    Window win=dialog.getWindow();
+    if(win!=null){win.setBackgroundDrawableResource(android.R.color.transparent);win.setLayout((int)(getResources().getDisplayMetrics().widthPixels*.91),-2);win.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);WindowManager.LayoutParams params=win.getAttributes();params.dimAmount=.36f;win.setAttributes(params);}
+    dialog.show();
+    if(dialog.getWindow()!=null)dialog.getWindow().setLayout((int)(getResources().getDisplayMetrics().widthPixels*.91),-2);
+    if(!reduceMotion){panel.setScaleX(.86f);panel.setScaleY(.86f);panel.setAlpha(0f);panel.animate().alpha(1f).scaleX(1).scaleY(1).setDuration(300).setInterpolator(new android.view.animation.OvershootInterpolator(.65f)).start();}
   }
-  private void moveIcon(int position){
+    private void moveIcon(int position){
     String[] slots=new String[16];for(int i=0;i<16;i++)slots[i]="Position "+(i+1);
     new AlertDialog.Builder(this).setTitle("Move to")
       .setItems(slots,(dialog,target)->{
@@ -329,7 +350,7 @@ public class MainActivity extends Activity {
   private void home(){
     canvas("home");
     shell.setPadding(dp(15),dp(10),dp(15),dp(18));
-    TextView status=text(new java.text.SimpleDateFormat("h:mm",Locale.UK).format(new Date())+"                                              ▮▮  ◕  ▰",15,Color.WHITE);
+    TextView status=text(new java.text.SimpleDateFormat(showSeconds?"h:mm:ss":"h:mm",Locale.UK).format(new Date())+"        ●●●  ▰",15,Color.WHITE);
     status.setTypeface(null,1);margin(shell,status,36,12);
     LinearLayout tiles=horizontal();tiles.setGravity(Gravity.TOP);
     LinearLayout weather=column();weather.setPadding(dp(16),dp(15),dp(10),dp(12));
@@ -455,13 +476,14 @@ public class MainActivity extends Activity {
     line("Reduce motion: "+(reduceMotion?"On":"Off"),()->{reduceMotion=!reduceMotion;getPreferences(0).edit().putBoolean("reduceMotion",reduceMotion).apply();settings();});
     line("Wallpaper: "+wallpaperNames[wallpaperStyle],this::chooseWallpaper);
     line("Customise Home Screen",this::editHome);
+    line("Status clock seconds: "+(showSeconds?"On":"Off"),()->{showSeconds=!showSeconds;getPreferences(0).edit().putBoolean("showSeconds",showSeconds).apply();settings();});
     line("Icon appearance: "+tintLabels[iconTint],this::iconAppearance);
     
     line("Reset Home Screen layout",this::resetLayout);
     line("App permissions",()->startActivity(new Intent(Settings.ACTION_APPLICATION_SETTINGS)));
     line("Battery settings",()->startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)));
     space(shell,18);
-    TextView note=text("GlassOS 0.5  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
+    TextView note=text("GlassOS 0.6  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
   }
   @Override public void onBackPressed(){if(page.equals("home"))super.onBackPressed();else home();}
 }

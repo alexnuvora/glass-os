@@ -1,9 +1,16 @@
-# GlassOS 0.5 design batch
+# GlassOS 0.6 design batch
 
-Official reference: https://developer.apple.com/design/whats-new/
+References: Apple design updates https://developer.apple.com/design/whats-new/ and Liquid Glass https://developer.apple.com/documentation/technologyoverviews/liquid-glass
 
-Implemented: selectable home-screen app slots; 4 editable dock positions; folder creation and editing via multi-select; folder opening and launch; move and swap home positions via menus; reset layout; persistent choices; icon saturation modes; four wallpaper presets; live battery percentage and current-date widget; spring press feedback; transition easing; sampled and softened launcher wallpaper behind glass surfaces with slight offset for refractive appearance; accessibility reduce-motion option; app library and notification viewer; Control Centre shortcuts.
+## Delivered in this batch
+- In-launcher glass folder overlay with a real grid of apps and spring-scale entrance animation, replacing basic list dialog
+- Working in-folder application launch and editing
+- Persistent status clock presentation control
+- Simplified reference-inspired status text
+- Existing customisable icons/dock, wallpaper-backed softened glass panels, battery/calendar widgets, searchable app library, preferences and icon long-press actions preserved
 
-Not implemented: Apple's proprietary Liquid Glass renderer; realtime blurring of arbitrary third-party applications; actual weather provider feed; Android AppWidget host embedding; drag-and-drop reordering; per-pixel GPU liquid physics or true operating-system-level iOS menus; replacement of protected system Settings/lockscreen/app switcher.
+## Rendering scope
+The glass backing samples a downscaled copy of GlassOS's own wallpaper, shifts the sampled coordinates slightly, and combines tinted gradients and optical edge highlights. It is not Apple's private Liquid Glass renderer; it does not dynamically refract all content or blur third-party app windows.
 
-GlassOS renders its own effects using Android drawing APIs. No Apple copyrighted assets or private frameworks are included.
+## Not yet pixel perfect
+Matching the reference across densities requires screenshot capture and measured rendering on the target phone. System status bar, Android protected surfaces and third-party UI cannot be fully replaced by an ordinary launcher. Folder animations and glass visuals are approximations, not identical Apple's proprietary algorithms.
