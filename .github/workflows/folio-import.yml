@@ -51,33 +51,9 @@ jobs:
           Licence: MIT; see LICENSE and upstream notices.
           This branch is a staging port, not the production main branch until build and on-device tests are completed.
           EOF
-          mkdir -p .github/workflows
-          cat > .github/workflows/glassos-folio-apk.yml <<'YAML'
-          name: GlassOS Folio APK
-          on:
-            push:
-              branches: [folio-full-port]
-            workflow_dispatch:
-          jobs:
-            apk:
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: actions/setup-java@v4
-                  with:
-                    distribution: temurin
-                    java-version: '17'
-                - uses: gradle/actions/setup-gradle@v4
-                - name: Compile full launcher APK
-                  run: ./gradlew :app:assembleDebug --no-daemon
-                - uses: actions/upload-artifact@v4
-                  with:
-                    name: GlassOS-Folio-debug-apk
-                    path: app/build/outputs/apk/debug/*.apk
-          YAML
           git add -A
           git commit -m "Full-source Folio port into GlassOS (MIT, staged)"
-          git push --force-with-lease origin HEAD:refs/heads/folio-full-port
+          git push origin HEAD:refs/heads/folio-full-port
       - name: Switch to imported Folio source before compiling
         run: |
           git fetch origin folio-full-port
