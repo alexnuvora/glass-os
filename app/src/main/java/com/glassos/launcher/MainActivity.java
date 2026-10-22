@@ -19,7 +19,7 @@ public class MainActivity extends Activity {
   private PackageManager pm;
   private LinearLayout shell;
   private String page="home";
-  private boolean dark=false, large=false;
+  private boolean dark=false, large=false, reduceMotion=false;
   private float downX, downY;
   private final int WHITE=Color.WHITE;
   private int dp(float n){return (int)(n*getResources().getDisplayMetrics().density+0.5f);}
@@ -66,10 +66,10 @@ public class MainActivity extends Activity {
     v.setClickable(true);
     v.setOnTouchListener((target,event)->{
       if(event.getAction()==MotionEvent.ACTION_DOWN){
-        target.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);target.animate().scaleX(.96f).scaleY(.96f).setDuration(110).start();return true;
+        target.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);if(reduceMotion)return true;target.animate().scaleX(.96f).scaleY(.96f).setDuration(110).start();return true;
       }
       if(event.getAction()==MotionEvent.ACTION_UP){
-        target.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(new android.view.animation.OvershootInterpolator(.6f)).start();
+        target.animate().scaleX(1f).scaleY(1f).setDuration(reduceMotion?0:220).setInterpolator(new android.view.animation.OvershootInterpolator(.6f)).start();
         if(event.getX()>=0&&event.getX()<=target.getWidth()&&event.getY()>=0&&event.getY()<=target.getHeight()) action.run();
         return true;
       }
@@ -88,7 +88,7 @@ public class MainActivity extends Activity {
     LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(h));p.bottomMargin=dp(bottom);host.addView(child,p);
   }
   private TextView pill(String label,Runnable action){TextView t=text(label,15,foreground());t.setBackground(translucent(30));touch(t,action);return t;}
-  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
+  @Override public void onCreate(Bundle b){super.onCreate(b);pm=getPackageManager();dark=getPreferences(0).getBoolean("dark",false);large=getPreferences(0).getBoolean("large",false);reduceMotion=getPreferences(0).getBoolean("reduceMotion",false);getWindow().setStatusBarColor(Color.TRANSPARENT);getWindow().setNavigationBarColor(Color.TRANSPARENT);getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);refresh();home();}
   private void refresh(){
     apps.clear();Intent i=new Intent(Intent.ACTION_MAIN);i.addCategory(Intent.CATEGORY_LAUNCHER);
     apps.addAll(pm.queryIntentActivities(i,0));apps.removeIf(a->getPackageName().equals(a.activityInfo.packageName));
@@ -163,20 +163,21 @@ public class MainActivity extends Activity {
     menu.getMenu().add("Open "+label);
     menu.getMenu().add("App info");
     menu.getMenu().add("All apps");
+    menu.getMenu().add("Home screen settings");
     menu.setOnMenuItemClickListener(item->{
       String choice=item.getTitle().toString();
       if(choice.startsWith("Open")){if(installed!=null)launch(installed);else library();}
       else if(choice.equals("App info") && installed!=null){
         Intent intent=new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
         intent.setData(android.net.Uri.parse("package:"+installed.activityInfo.packageName));startActivity(intent);
-      }else library();
+      }else if(choice.equals("Home screen settings"))settings();else library();
       return true;
     });
     anchor.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
     menu.show();
   }
   private void enter(View view){
-    view.setAlpha(0f);view.setTranslationY(dp(12));
+    if(reduceMotion)return;view.setAlpha(0f);view.setTranslationY(dp(12));
     view.animate().alpha(1f).translationY(0).setDuration(220)
       .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
   }
@@ -252,9 +253,11 @@ public class MainActivity extends Activity {
       dock.addView(slot,new LinearLayout.LayoutParams(0,dp(67),1));
     }
     add(shell,dock,-1,86);
+    shell.setFocusableInTouchMode(true);
+    shell.setOnTouchListener((v,e)->{if(e.getAction()==MotionEvent.ACTION_DOWN){downX=e.getX();downY=e.getY();return true;}if(e.getAction()==MotionEvent.ACTION_UP){float dx=e.getX()-downX,dy=e.getY()-downY;if(dy>dp(65))controls();else if(dy< -dp(65)||dx< -dp(95))library();else if(dx>dp(95))notifications();return true;}return true;});
   }
   private void library(){
-    canvas("library");title("App Library");EditText input=new EditText(this);input.setSingleLine();input.setHint("⌕  Search");input.setTextSize(17);input.setPadding(dp(20),0,dp(15),0);input.setBackground(translucent(19));margin(shell,input,52,20);input.setContentDescription("Search installed applications");
+    refresh();canvas("library");title("App Library");EditText input=new EditText(this);input.setSingleLine();input.setHint("⌕  Search");input.setTextSize(17);input.setPadding(dp(20),0,dp(15),0);input.setBackground(translucent(19));margin(shell,input,52,20);input.setContentDescription("Search installed applications");
     ScrollView scroll=new ScrollView(this);scroll.setVerticalScrollBarEnabled(false);scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);scroll.setFillViewport(true);LinearLayout content=column();scroll.addView(content);shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
     Runnable update=()->{content.removeAllViews();ArrayList<ResolveInfo> chosen=new ArrayList<>();String q=input.getText().toString().toLowerCase(Locale.ROOT);for(ResolveInfo a:apps)if(a.loadLabel(pm).toString().toLowerCase(Locale.ROOT).contains(q))chosen.add(a);grid(content,chosen);};
     input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){}public void onTextChanged(CharSequence s,int st,int before,int count){update.run();}public void afterTextChanged(Editable e){}});update.run();enter(scroll);
@@ -268,6 +271,7 @@ public class MainActivity extends Activity {
     LinearLayout top=horizontal();
     TextView wifi=button("●\nWi-Fi",()->startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS)));top.addView(wifi,new LinearLayout.LayoutParams(0,dp(125),1));
     TextView bluetooth=button("ᛒ\nBluetooth",()->startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(0,dp(125),1);bp.leftMargin=dp(12);top.addView(bluetooth,bp);add(shell,top,-1,125);space(shell,12);
+    line("Mobile network",()->startActivity(new Intent(Settings.ACTION_WIRELESS_SETTINGS)));
     TextView media=button("♪       Not Playing\n\n            ▶",()->startActivity(new Intent(Settings.ACTION_SOUND_SETTINGS)));margin(shell,media,132,12);
     line("Focus & sound",()->startActivity(new Intent(Settings.ACTION_SOUND_SETTINGS)));
     TextView brightness=text("☀   Brightness",19,foreground());add(shell,brightness,-1,46);
@@ -275,7 +279,7 @@ public class MainActivity extends Activity {
       public void onProgressChanged(SeekBar seek,int progress,boolean fromUser){if(fromUser){WindowManager.LayoutParams a=getWindow().getAttributes();a.screenBrightness=Math.max(.02f,progress/255f);getWindow().setAttributes(a);}}
       public void onStartTrackingTouch(SeekBar s){}public void onStopTrackingTouch(SeekBar s){}
     });add(shell,slider,-1,58);
-    line("Notifications",this::notifications);line("GlassOS Settings",this::settings);enter(shell);
+    line("Notifications",this::notifications);line("Display options",()->startActivity(new Intent(Settings.ACTION_DISPLAY_SETTINGS)));line("GlassOS Settings",this::settings);enter(shell);
   }
   private void notifications(){
     canvas("notifications");title("Notifications");
@@ -300,6 +304,10 @@ public class MainActivity extends Activity {
     line("Notification access",()->startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
     line("Android system settings",()->startActivity(new Intent(Settings.ACTION_SETTINGS)));
     line("Refresh installed apps",()->{refresh();home();});
+    line("Reduce motion: "+(reduceMotion?"On":"Off"),()->{reduceMotion=!reduceMotion;getPreferences(0).edit().putBoolean("reduceMotion",reduceMotion).apply();settings();});
+    line("Wallpaper & style",()->startActivity(new Intent(Settings.ACTION_DISPLAY_SETTINGS)));
+    line("App permissions",()->startActivity(new Intent(Settings.ACTION_APPLICATION_SETTINGS)));
+    line("Battery settings",()->startActivity(new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)));
     space(shell,18);
     TextView note=text("GlassOS 0.3  •  iOS-inspired design\n\nThird-party apps and protected Samsung system screens retain their own interface.",13,foreground());add(shell,note,-1,120);
   }

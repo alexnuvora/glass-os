@@ -1,9 +1,13 @@
 # GlassOS Launcher
 
-An Android launcher prototype inspired by iOS. This is not a full system skin.
+An independent iOS-inspired Android home launcher for Samsung devices. Not a full OS replacement.
 
-## Install
+## Build
 
-Run the GitHub Actions `Build Android APK` workflow, download the `GlassOS-debug-apk` artifact from the workflow run, unzip it, and install `app-debug.apk` on your phone. Then choose GlassOS as your default Home app in Android Settings.
+GitHub Actions > Build Android APK > latest successful run > Artifacts > GlassOS-debug-apk.
 
-> This prototype cannot modify protected Samsung system menus, third-party app UI, or Android security screens. Notification access is optional.
+## Features
+
+Reference-inspired widgets, home app grid and translucent dock; layered glass rendering; haptic/spring press feedback; long-press application actions; app search; gesture navigation; Control Centre shortcuts; notification access; appearance, icon-scale and reduced-motion controls.
+
+See [design roadmap](DESIGN-ROADMAP.md). System screens and third-party applications remain Android-native.
